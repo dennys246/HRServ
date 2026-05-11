@@ -1,0 +1,84 @@
+# docker-compose for whichever node is currently the REPLICA (initially hrserv-2).
+# Streaming standby of the primary's Postgres over Tailscale. Serves /healthz;
+# refuses /upload_json with 503 (HRServ enforces this via NODE_ROLE).
+# Cloudflared is configured but the DNS record for api.hrfunc.org is NOT pointed
+# here until manual failover (see docs/FAILOVER.md).
+#
+# Required env (set in `.env` next to this file or in the shell that invokes compose):
+#   POSTGRES_PASSWORD       — superuser password (only used inside the standby)
+#   HRSERV_DB_PASSWORD      — application-role password (used by HRServ when reading)
+#   REPLICATOR_PASSWORD     — replication-role password (matches primary's)
+#   PRIMARY_TAILSCALE_IP    — the current primary's tailnet IP
+#   TUNNEL_TOKEN            — cloudflared tunnel token for this node
+#
+# Bootstrap data dir with `pg_basebackup` from the primary before bringing this up
+# — see docs/FAILOVER.md (replica setup section).
+
+# Compose project name is intentionally role-agnostic — after a failover, the
+# same host runs the OTHER compose file, and consistent project naming keeps
+# `docker compose ps` readable across the swap.
+name: hrserv
+
+volumes:
+  pg_data_replica:
+
+networks:
+  internal:
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PRIMARY_TAILSCALE_IP: ${PRIMARY_TAILSCALE_IP:?set PRIMARY_TAILSCALE_IP}
+      REPLICATOR_PASSWORD: ${REPLICATOR_PASSWORD:?set REPLICATOR_PASSWORD}
+    volumes:
+      - pg_data_replica:/var/lib/postgresql/data
+      - ./postgres/replica.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+    ports:
+      - "${TAILSCALE_IP:?set TAILSCALE_IP}:5432:5432"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hrserv"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  hrserv:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: hrserv:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://hrserv:${HRSERV_DB_PASSWORD}@postgres:5432/hrserv
+      NODE_ROLE: replica
+      MAX_UPLOAD_BYTES: "5242880"
+      REQUIRE_CF_ACCESS_HEADERS: "true"
+      LOG_LEVEL: INFO
+    networks:
+      - internal
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - hrserv
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run
+    networks:
+      - internal

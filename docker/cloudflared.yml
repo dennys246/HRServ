@@ -1,0 +1,27 @@
+# cloudflared ingress config — referenced by the tunnel created in the Cloudflare
+# dashboard. This file is informational: with `TUNNEL_TOKEN` the connector pulls
+# its full config from Cloudflare, and the dashboard is the source of truth for
+# ingress rules. Keep this file in sync as documentation of what the dashboard
+# should look like.
+#
+# To run with this file as authoritative (alternative to the token-based flow),
+# also mount a `credentials-file` and run `tunnel run <name>` instead of
+# `tunnel run` with TUNNEL_TOKEN.
+
+ingress:
+  # /upload_json — write endpoint, gated by Cloudflare Access service token.
+  - hostname: api.hrfunc.org
+    path: /upload_json
+    service: http://hrserv:8000
+
+  # /healthz — public read for monitoring + frontend maintenance-banner polling.
+  - hostname: api.hrfunc.org
+    path: /healthz
+    service: http://hrserv:8000
+
+  # Catch-all everything else on api.hrfunc.org.
+  - hostname: api.hrfunc.org
+    service: http://hrserv:8000
+
+  # Cloudflare requires a final default rule.
+  - service: http_status:404

@@ -1,0 +1,87 @@
+# docker-compose for whichever node is currently the PRIMARY (initially hrserv-1).
+# Owns writes; serves api.hrfunc.org via Cloudflare Tunnel.
+#
+# Required env (set in `.env` next to this file or in the shell that invokes compose):
+#   POSTGRES_PASSWORD       — superuser password
+#   HRSERV_DB_PASSWORD      — application-role password (used by HRServ)
+#   REPLICATOR_PASSWORD     — replication-role password (used by the replica peer)
+#   TUNNEL_TOKEN            — cloudflared tunnel token for this node
+#   REPLICA_TAILSCALE_IP    — the replica peer's tailnet IP, for pg_hba.conf
+#
+# Postgres is bound to the Tailscale interface ONLY (TAILSCALE_IP). It is never
+# reachable from the public internet; replication and admin traffic ride the tailnet.
+
+# Compose project name is intentionally role-agnostic — after a failover, the
+# same host runs the OTHER compose file, and consistent project naming keeps
+# `docker compose ps` readable across the swap.
+name: hrserv
+
+volumes:
+  pg_data_primary:
+
+networks:
+  internal:
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: hrserv
+      HRSERV_DB_PASSWORD: ${HRSERV_DB_PASSWORD:?set HRSERV_DB_PASSWORD}
+      REPLICATOR_PASSWORD: ${REPLICATOR_PASSWORD:?set REPLICATOR_PASSWORD}
+    volumes:
+      - pg_data_primary:/var/lib/postgresql/data
+      - ./postgres/primary.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - ../migrations:/migrations:ro
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+    # Bind only to the loopback inside the container network plus the tailnet IP.
+    # Replication peers reach this via the host's Tailscale interface mapped here.
+    ports:
+      - "${TAILSCALE_IP:?set TAILSCALE_IP}:5432:5432"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hrserv"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  hrserv:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: hrserv:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://hrserv:${HRSERV_DB_PASSWORD}@postgres:5432/hrserv
+      NODE_ROLE: primary
+      MAX_UPLOAD_BYTES: "5242880"
+      REQUIRE_CF_ACCESS_HEADERS: "true"
+      LOG_LEVEL: INFO
+    networks:
+      - internal
+    # No published ports — cloudflared reaches it over the compose network.
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - hrserv
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run
+    networks:
+      - internal
