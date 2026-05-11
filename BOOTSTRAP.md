@@ -252,10 +252,15 @@ Once `POST /upload_json` works against the tunnel with curl + a real past submis
 - ✅ **Backups**: Local + cross-shipped to peer + Backblaze B2 free tier. Triple-copy strategy.
 - ✅ **Files in Postgres** as `jsonb` (not on disk). Reconsider only if files balloon past 5 MB or backups become painful.
 
+## Resolved hardware plan
+
+- ✅ **hrserv-1 (production primary, now):** the legacy "HRF receive/send" Linux x86-64 PC that has historically run `flask.jib-jab.org/upload_json`. The old Flask service keeps running on this box during the shadow phase; HRServ comes up on its own internal port + Cloudflare Tunnel for `api.hrfunc.org/upload_json`.
+- ✅ **hrserv-2 (production replica, ~August 2026):** Mac Mini purchased for this purpose. macOS host, arm64. All our images have arm64 variants. Cutover from the test PC happens when the Mini arrives.
+- ✅ **Test replica (parallel, May 2026 → August 2026):** a separate home-built Linux x86-64 PC, used to validate streaming replication and failover scripts ahead of the Mini's arrival. Data on this node is **non-canonical** — it can be wiped and rebuilt freely. Backups stay local + B2 on hrserv-1 during this period; the cross-shipped backup leg through the test PC does NOT count as a real off-site copy until the Mini is in a different building. **Decommission when the Mini arrives:** wipe the data directory, remove the node from the tailnet, re-run `scripts/configure_pg_hba.sh` on hrserv-1 with the Mini's tailnet IP. Do NOT leave the test PC running as a third node.
+
 ## Still to decide during Phase 2
 
-- [ ] Physical locations of `hrserv-1` and `hrserv-2` (must be in different buildings/sites for backup pattern to count as off-site)
-- [ ] Specific hardware for each node (Pi 5 / NAS / mini PC / existing box)
+- [ ] Physical locations of hrserv-1 and the eventual Mac Mini (must be in different buildings/sites to make the triple-copy backup story fully off-site)
 - [ ] Argon2 parameters (library defaults unless reason otherwise)
 - [ ] Failover trigger threshold (manual only for MVP; automation is post-MVP)
 

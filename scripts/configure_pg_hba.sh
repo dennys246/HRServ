@@ -4,17 +4,23 @@
 # pg_hba.conf does NOT support environment-variable expansion at Postgres
 # startup, so we fill in the concrete IP at deploy-time and commit the result
 # alongside the per-host .env. (The shipped template uses a deliberately
-# invalid placeholder so a missed substitution fails loudly.)
+# invalid placeholder so a missed substitution fails loudly — Postgres will
+# refuse to load the hba file and the container crashloops, which is what
+# we want operators to notice.)
 #
 # Usage (run from the repo root, on each node):
 #     ./scripts/configure_pg_hba.sh 100.64.1.42
 #
-# Where 100.64.1.42 is the OTHER node's tailnet IP. After running, restart
-# Postgres so the new rules take effect:
-#     docker compose -f docker/docker-compose.<role>.yml restart postgres
+# Where 100.64.1.42 is the OTHER node's tailnet IP. During Phase 2a (no
+# replica exists yet) substitute 127.0.0.1 — replication from anywhere real
+# will fail to match, which is what we want. Re-run with the real peer IP
+# when the replica is being provisioned.
 #
-# Re-run any time the peer's tailnet IP changes (after a Tailscale auth
-# rotation, for example).
+# This script handles BOTH first-time substitution (replacing the
+# REPLACE_WITH_PEER_TAILSCALE_IP placeholder) AND later updates (replacing
+# whatever IP is currently substituted). After running, restart Postgres
+# so the new rules take effect:
+#     docker compose -f docker/docker-compose.<role>.yml restart postgres
 
 set -euo pipefail
 
@@ -51,16 +57,36 @@ if [ ! -f "$HBA_FILE" ]; then
     exit 4
 fi
 
-if ! grep -q 'REPLACE_WITH_PEER_TAILSCALE_IP' "$HBA_FILE"; then
-    echo "INFO: $HBA_FILE has no remaining placeholders — nothing to do." >&2
-    echo "      (If you need to update the peer IP, edit the file by hand or" >&2
-    echo "       reset it from git first.)" >&2
-    exit 0
+# Match the host-replication-replicator line and rewrite its address.
+# This handles both first-time substitution (matches the literal placeholder)
+# AND later re-substitution (matches a previously-installed IPv4/32). Anchor
+# on the leading `host replication replicator` so we don't touch other lines.
+#
+# Sed Extended-regex is more readable across BSD/GNU when escaping is light;
+# use a Perl-style group to capture the address slot.
+REPLICATION_LINE_RE='^([[:space:]]*host[[:space:]]+replication[[:space:]]+replicator[[:space:]]+)([^[:space:]]+)([[:space:]]+.*)$'
+
+if ! grep -qE "$REPLICATION_LINE_RE" "$HBA_FILE"; then
+    echo "ERROR: no replication entry found in $HBA_FILE — was it edited by hand?" >&2
+    echo "       Restore from git: git checkout -- $HBA_FILE" >&2
+    exit 5
 fi
 
 # Portable in-place sed (BSD vs GNU). Use a backup suffix and remove it.
-sed -i.bak "s|REPLACE_WITH_PEER_TAILSCALE_IP|$PEER_IP|g" "$HBA_FILE"
+sed -i.bak -E \
+    "s|$REPLICATION_LINE_RE|\1${PEER_IP}/32\3|" \
+    "$HBA_FILE"
 rm -f "$HBA_FILE.bak"
 
-echo "Substituted REPLACE_WITH_PEER_TAILSCALE_IP -> $PEER_IP/32 in $HBA_FILE"
+# Confirm the substitution took.
+NEW_LINE=$(grep -E "^[[:space:]]*host[[:space:]]+replication[[:space:]]+replicator" "$HBA_FILE" || true)
+if [ -z "$NEW_LINE" ] || ! echo "$NEW_LINE" | grep -q "$PEER_IP/32"; then
+    echo "ERROR: substitution failed; pg_hba.conf may be in an inconsistent state." >&2
+    echo "       Inspect: $HBA_FILE" >&2
+    exit 6
+fi
+
+echo "Set replication peer to $PEER_IP/32 in $HBA_FILE"
+echo "Current line:"
+echo "  $NEW_LINE"
 echo "Restart Postgres for the new rules to take effect."
