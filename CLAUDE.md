@@ -5,13 +5,13 @@ Project-specific guidance for Claude Code working in this repo.
 ## What this repo is
 
 HRServ is the FastAPI receiver service that replaces `flask.jib-jab.org/upload_json`. It accepts
-HRF JSON uploads from the `hrfunc-flask-app` frontend (pre-augmented with a `_hrf_submission`
+HRF JSON uploads from the `hrfunc-web` frontend (pre-augmented with a `_hrf_submission`
 envelope) and persists them in Postgres. Read [BOOTSTRAP.md](BOOTSTRAP.md) for the full plan.
 
 Sibling repos worth knowing about:
 - `/Users/dennyschaedig/Scripts/HRFunc` — the Python library (`pip install hrfunc`) that produces
   the JSON HRServ ingests. May be updated to better suit HRServ; flag rather than work around.
-- `hrfunc-flask-app` — Flask frontend on Render that augments JSON before forwarding here.
+- `hrfunc-web` — Flask frontend on Render that augments JSON before forwarding here.
 
 ## Development standards (hard rules)
 
@@ -27,7 +27,7 @@ get explicit user approval and file a follow-up issue.
 Never commit directly to `main`. Use a branch per change. **Before pushing**, run a deep parallel
 review with two concurrent agents:
 - **Execution review** — code correctness, edge cases, test adequacy.
-- **Architectural review** — system fit, coupling, cross-repo effects (HRFunc, hrfunc-flask-app,
+- **Architectural review** — system fit, coupling, cross-repo effects (HRFunc, hrfunc-web,
   schema/replication implications).
 
 Use the Agent tool with `Explore` or `general-purpose` subagents, dispatched in a single message

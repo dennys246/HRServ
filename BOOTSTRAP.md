@@ -4,7 +4,7 @@ A self-contained brief for starting the `hrserv` repo.
 
 ## What HRServ is
 
-The receiver service that replaces `https://flask.jib-jab.org/upload_json`. It accepts HRF (Hemodynamic Response Function) JSON uploads from the `hrfunc-flask-app` frontend, validates them, and persists them in Postgres. Exposed to the internet only through a Cloudflare Tunnel.
+The receiver service that replaces `https://flask.jib-jab.org/upload_json`. It accepts HRF (Hemodynamic Response Function) JSON uploads from the `hrfunc-web` frontend, validates them, and persists them in Postgres. Exposed to the internet only through a Cloudflare Tunnel.
 
 **Topology: two nodes from day one.**
 
@@ -233,7 +233,7 @@ Only after every box is ticked, move to Phase 3 (ingest endpoint code).
 
 Once `POST /upload_json` works against the tunnel with curl + a real past submission:
 
-1. In `hrfunc-flask-app`, set on Render:
+1. In `hrfunc-web`, set on Render:
    - `HRFUNC_SHADOW_URL=https://api.hrfunc.org/upload_json`
    - `HRFUNC_ACCESS_CLIENT_ID=<service token id>`
    - `HRFUNC_ACCESS_CLIENT_SECRET=<service token secret>`
@@ -275,7 +275,7 @@ Once `POST /upload_json` works against the tunnel with curl + a real past submis
 
 ## Reference: frontend wiring
 
-After **Phase 1** of `hrfunc-flask-app` (landed, commit 276eaf7): frontend reads `HRFUNC_UPLOAD_URL` from env, calls `forward_to_backend(UPLOAD_URL, filename, augmented_bytes)`.
+After **Phase 1** of `hrfunc-web` (landed, commit 276eaf7): frontend reads `HRFUNC_UPLOAD_URL` from env, calls `forward_to_backend(UPLOAD_URL, filename, augmented_bytes)`.
 
 After **Phase 1.5** (landing next): `forward_to_backend` will also send `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers when those env vars are set. No-op for the current `flask.jib-jab.org` backend (which ignores them); required for `api.hrfunc.org`.
 

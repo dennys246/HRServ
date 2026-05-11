@@ -1,7 +1,7 @@
 [project]
 name = "hrserv"
 version = "0.1.0"
-description = "Receiver service for HRF JSON uploads from the hrfunc-flask-app frontend"
+description = "Receiver service for HRF JSON uploads from the hrfunc-web frontend"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "BSD-3-Clause"
