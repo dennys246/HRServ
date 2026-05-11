@@ -1,0 +1,30 @@
+# Local test database. Brings up a throwaway Postgres on host port 55432 so
+# pytest can hit a real DB without colliding with anything else running on 5432.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.test.yml up -d
+#   export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55432/hrserv_test
+#   uv run pytest
+#   docker compose -f docker/docker-compose.test.yml down -v
+
+name: hrserv-test
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: hrserv_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - ../migrations:/migrations:ro
+      - ./postgres/test-initdb:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hrserv_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
