@@ -36,6 +36,7 @@ docker compose -f docker/docker-compose.test.yml up -d
 
 # Point the app/tests at it.
 export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55432/hrserv_test
+export NODE_ROLE=primary                 # required (no default) so misconfigured nodes fail to start
 export REQUIRE_CF_ACCESS_HEADERS=false   # the Access edge isn't in front of us locally
 
 # Run lint, types, tests.

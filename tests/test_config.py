@@ -7,8 +7,26 @@ from pydantic import ValidationError
 
 from hrserv.config import NodeRole, Settings
 
+# Any env var the developer might have exported in their shell while iterating
+# (e.g. README's local-dev snippet exports REQUIRE_CF_ACCESS_HEADERS=false).
+# Tests that assert defaults must clear these so they don't read the dev shell.
+_OPTIONAL_SETTINGS_ENV = (
+    "MAX_UPLOAD_BYTES",
+    "REQUIRE_CF_ACCESS_HEADERS",
+    "LOG_LEVEL",
+    "DB_POOL_MIN_SIZE",
+    "DB_POOL_MAX_SIZE",
+)
+
+
+def _scrub_optional_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove the optional Settings env vars so we test schema defaults, not shell state."""
+    for name in _OPTIONAL_SETTINGS_ENV:
+        monkeypatch.delenv(name, raising=False)
+
 
 def test_optional_defaults_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    _scrub_optional_env(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgresql://x/y")
     monkeypatch.setenv("NODE_ROLE", "primary")
     s = Settings()  # type: ignore[call-arg]
