@@ -101,6 +101,9 @@ from the test replica's `primary_conninfo` later.
 
 ## 3. Clone the repo
 
+`/opt/hrserv` is the conventional location (FHS-compliant for add-on service
+software) and matches what every node in the cluster will use:
+
 ```bash
 sudo mkdir -p /opt/hrserv
 sudo chown $USER /opt/hrserv
@@ -109,52 +112,140 @@ git clone https://github.com/dennys246/HRServ.git .
 git checkout main
 ```
 
+**Quality-of-life tip** — add a compose alias to your shell rc, since
+you'll type the full `docker compose -f docker/...` prefix dozens of times
+during Phase 2:
+
+```bash
+echo "alias dc='docker compose -f docker/docker-compose.primary.yml'" >> ~/.bashrc
+source ~/.bashrc
+```
+
+Then `dc logs -f hrserv`, `dc ps`, `dc exec hrserv hrserv-mint-key --label …`
+all work without the long prefix. The runbook below still spells out the full
+command for clarity, but use `dc` if you've set up the alias.
+
 ## 4. Cloudflare Tunnel for HRServ
 
-In the Cloudflare dashboard (cloudflare.com → Zero Trust → Networks → Tunnels):
+> **Heads up — UI rewrite (2026).** Cloudflare significantly restructured the
+> tunnel dashboard in early 2026. What used to be called "Public Hostnames" is
+> now "**Published applications**", the "Configure" tab is gone, and Networks
+> → Tunnels lives in both the Zero Trust dashboard AND the core Cloudflare
+> dashboard. The flow below reflects the current UI; if your dashboard looks
+> different, the menus may have moved again.
 
-1. Create a new tunnel named `hrserv-1`.
-2. Choose "Docker" as the connector type — copy the `TUNNEL_TOKEN` string
-   that's displayed (you'll only see it once; save it to the password manager).
-3. Add a Public Hostname:
-   - Hostname: `api.hrfunc.org`
-   - Service type: `HTTP`
-   - URL: `hrserv:8000` (the container name + port within the compose network)
+Open https://one.dash.cloudflare.com → **Networks → Tunnels**.
+(If your dashboard has consolidated tunnel management into the core dashboard
+at `dash.cloudflare.com → Networking → Tunnels` by the time you read this,
+that path works too — Cloudflare maintains both.)
 
-DNS for `api.hrfunc.org` should automatically point at the new tunnel — verify
-under `hrfunc.org` → DNS that there's a `CNAME api → <tunnel-id>.cfargotunnel.com`.
-Note: the existing `flask.jib-jab.org` tunnel for the old service is untouched.
+### Create the tunnel
+
+1. Click **Create a tunnel** → choose **Cloudflared** as the connector
+   (NOT WARP).
+2. Name it `hrserv-1` → Save.
+3. On the **Install and run a connector** screen, switch tabs to **Docker**
+   (NOT Debian / Linux / Windows; those install a host-level systemd service
+   that would compete with our compose `cloudflared` container).
+4. The token is the long base64 string after `--token` in the example command.
+   Copy ONLY that token. Save it to your password manager — suggested label
+   `HRSERV_TUNNEL_TOKEN` (it lands in `docker/.env` as the variable named
+   `TUNNEL_TOKEN`; the env var name is fixed by cloudflared's convention,
+   but the password-manager label is yours to pick — prefixing with `HRSERV_`
+   keeps it grouped with the other secrets).
+   - Don't paste the token into a shell on hrserv-1 (it'd land in `.bash_history`).
+   - Don't run the example `docker run` command from the dashboard — our
+     compose stack will run cloudflared in Step 8 using the same token.
+
+### Add the published-application route
+
+5. After the connector step, navigate to the tunnel's **Published application**
+   tab. Click **Add a published application** (or **Add route**).
+6. Fill in:
+
+| Field | Value |
+|---|---|
+| Subdomain | `api` |
+| Domain | `hrfunc.org` |
+| Path | (leave empty — catches all paths under the hostname) |
+| Service URL | `http://hrserv:8000` |
+
+Note the `http://` prefix is **required** — the new UI combined the Service
+Type dropdown and URL into a single field that validates the protocol. Plain
+`hrserv:8000` will be rejected with "Invalid service URL format".
+
+7. Save. Cloudflare automatically creates the DNS CNAME for `api.hrfunc.org`
+   pointing at `<tunnel-uuid>.cfargotunnel.com` (Proxied / orange cloud).
+
+> **Gotcha:** if a DNS record for `api` already exists in your `hrfunc.org`
+> zone (e.g., from an earlier manual experiment), the save will fail with
+> "A record with that host already exists." Delete the manual record under
+> **DNS → Records** and re-save the published application; Cloudflare will
+> recreate an identical CNAME with the proper "managed by tunnel" tagging.
+
+The existing `flask.jib-jab.org` tunnel for the old Flask service is on a
+different zone and is untouched.
 
 ## 5. Cloudflare Access policies (TWO apps)
 
-Same dashboard → Zero Trust → Access → Applications. Create BOTH of these:
+> **🚨 CRITICAL gotcha:** the "Create an application" flow in the 2026 UI does
+> NOT force you to attach a policy. If you save the application without
+> attaching one, the app shows "Policies assigned: 0" and Cloudflare's
+> default action is **deny** — every request gets 302-redirected to the
+> Access login page (even `/healthz`, even with valid service tokens). Verify
+> `Policies assigned: 1` on each app's details view before considering Step 5
+> done. If the dashboard prompts you mid-flow to "add a policy" — do it,
+> don't skip past the prompt.
 
-### App 1: `/upload_json` (service-token protected)
+Same dashboard → **Access → Applications**. Create BOTH of these.
+
+### App 1: `hrserv-upload` (service-token protected)
 
 - Type: Self-hosted
-- Hostname: `api.hrfunc.org`
-- Path: `/upload_json`
+- Application name: `hrserv-upload`
+- Application Domain: Subdomain `api`, Domain `hrfunc.org`, Path `upload_json`
+  (no leading slash — Cloudflare adds it)
 - Policy:
   - Name: `frontend-service-token`
-  - Action: Service Auth
-  - Include: Service Token → create new → `flask-frontend`
-  - Save both the **Client ID** and **Client Secret** to the password manager
-    — they're only shown once.
+  - Action: **Service Auth**
+  - Include rule: Selector `Service Token` → `flask-frontend`
+    (create the token mid-flow if it doesn't yet exist; capture **Client ID**
+    AND **Client Secret** to the password manager BEFORE clicking off the
+    dialog — the secret is shown exactly once)
 
-### App 2: `/healthz` (public)
+### App 2: `hrserv-healthz` (public)
 
 - Type: Self-hosted
-- Hostname: `api.hrfunc.org`
-- Path: `/healthz`
+- Application name: `hrserv-healthz`
+- Application Domain: Subdomain `api`, Domain `hrfunc.org`, Path `healthz`
 - Policy:
   - Name: `public-healthz`
-  - Action: Bypass (no auth required)
-  - Include: Everyone
+  - Action: **Bypass** (NOT "Allow" — see distinction below)
+  - Include rule: Selector `Everyone`
+
+> **Bypass vs Allow — important distinction.** Both sound permissive, but:
+>
+> - **Bypass** → skip Cloudflare Access entirely for matching requests. No
+>   session cookie, no JWT, no challenge. Right pick for an unauthed public
+>   endpoint like `/healthz`.
+> - **Allow** → still evaluates Access (creates a session, sets cookies);
+>   only meaningful when paired with identity providers. Wrong pick for an
+>   unauthed endpoint — without an authenticated identity, "Allow" still
+>   302-redirects.
+>
+> Picking Allow here was a real Phase 2a mis-step on the first try.
 
 The frontend polls `/healthz` to auto-toggle its maintenance banner, and your
-own monitoring will hit it from anywhere — both need to bypass Access.
+own monitoring will hit it from anywhere — both need **Bypass**, not Allow.
 Without this app, `/healthz` inherits the zone-wide default policy, which is
 indeterminate.
+
+### Verify both apps before continuing
+
+Open each app's details page. Both should show **Policies assigned: 1** (NOT 0).
+If either reads 0, Edit → Policies → Add → save → re-check. This is the single
+most common reason Step 9's smoke tests come back as 302 redirects instead of
+hitting HRServ.
 
 ## 6. Configure the `.env` file
 
@@ -223,26 +314,70 @@ If `postgres` crashloops with a pg_hba complaint, you skipped Step 7.
 
 ## 9. Verify externally
 
-From a device NOT on your LAN (phone with wifi off, friend's machine,
-GitHub Actions, etc.):
+From any machine that doesn't short-circuit DNS or routing to jib-jab — your
+local dev machine (if it's on a different physical network) works, as does
+your phone on cellular, a VPS, or GitHub Actions. Cloudflare Tunnel is
+outbound-only from the connector, so requests always traverse a Cloudflare
+POP regardless of physical location; "different physical network" is just
+extra hygiene.
 
 ```bash
-curl -sS https://api.hrfunc.org/healthz
-# Expect: {"status":"ok","db":true,"node_role":"primary"}
+curl -sSi https://api.hrfunc.org/healthz
+# Expect: HTTP/2 200 + {"status":"ok","db":true,"node_role":"primary"}
 
 curl -sS -o /dev/null -w "%{http_code}\n" \
     -X POST https://api.hrfunc.org/upload_json
-# Expect: 401 (Cloudflare Access blocks at the edge — no service token)
+# Expect: 302 OR 401 (Cloudflare Access blocks at the edge — request never
+#         reaches HRServ). Browsers and some curl builds get 302 (redirect
+#         to login); other clients get 401. Both signal "edge denied".
 
 curl -sS -X POST https://api.hrfunc.org/upload_json \
     -H "CF-Access-Client-Id: <client id from step 5>" \
     -H "CF-Access-Client-Secret: <client secret from step 5>"
-# Expect: 401 from HRServ ("Missing x-api-key header" plain text)
+# Expect: 401 + "Missing x-api-key header" plain text (request reached HRServ;
+#         app-layer auth caught the missing key)
 ```
 
-If `/healthz` doesn't return 200 from off-LAN: check cloudflared logs,
-verify the Access "public-healthz" app exists, verify DNS resolution
-of `api.hrfunc.org`.
+While running these, tail the hrserv logs in another terminal on jib-jab to
+verify each request's progress:
+
+```bash
+docker compose -f docker/docker-compose.primary.yml logs -f hrserv
+```
+
+- The 302/401 case (no service token) should produce **NO** new log entry —
+  Cloudflare blocked at the edge before forwarding to the tunnel.
+- The 200 and HRServ-401 cases should each produce a log entry with a
+  non-`127.0.0.1` source IP (typically something in `172.x.x.x` — that's
+  cloudflared inside the compose internal network forwarding the request;
+  the exact subnet varies depending on other docker networks on the host).
+
+### If DNS is misbehaving on the test client
+
+Some home routers / ISP resolvers cache `NXDOMAIN` aggressively. If you find
+that `dig api.hrfunc.org` returns no answer locally but `dig @1.1.1.1
+api.hrfunc.org` does, the local resolver is the culprit. Two options:
+
+1. **Bypass DNS for the test:** use `curl --resolve` to tell curl which IP
+   to dial without consulting DNS. Extract the IP via Cloudflare's resolver
+   in one step so you don't paste a literal X/Y placeholder:
+   ```bash
+   IP=$(dig @1.1.1.1 api.hrfunc.org +short | head -1)
+   echo "Using $IP"
+   curl -sSi --resolve "api.hrfunc.org:443:$IP" https://api.hrfunc.org/healthz
+   ```
+2. **Point the test client at Cloudflare DNS** (more permanent — Network
+   preferences on Mac / network manager on Linux → DNS → `1.1.1.1`).
+
+The router's negative-cache TTL is usually 15–60 minutes; option 2 dodges it.
+Production frontend traffic from Render uses public DNS, so this is a
+test-client issue only — won't affect real users.
+
+### If you see 302 redirects (especially from `/healthz`)
+
+That almost certainly means an Access app has "Policies assigned: 0". Go
+back to Step 5 and verify both apps have their policies attached. This was
+the single most common Step 9 failure during the original Phase 2a run.
 
 ## 10. Mint the frontend's API key
 
@@ -301,4 +436,52 @@ disguised as success. To exercise a fresh insert, edit the fixture's
 
 ## Lessons learned
 
-(none yet — append after running this for real.)
+Append-only log of what surprised the operator during a real Phase 2a run.
+
+### 2026-05-11 — hrserv-1 initial setup (Denny + Claude)
+
+- **5432 was occupied** by a host-level Postgres 17 that had been set up
+  speculatively for the old Flask app but never actually used. Stopped +
+  disabled the systemctl unit (`postgresql.service`), kept the data dir at
+  `/var/lib/postgresql/17/` on disk in case we want to refer back. Safety
+  pg_dump archived at `/var/backups/legacy-hrfuncdb/` before stopping. Step 0
+  pre-flight caught this cleanly.
+- **Tailscale 1.96.4** installed fine via the official `install.sh`. Tailnet
+  IP for `jib-jab` is `100.91.182.4`. Disable key expiry in the admin panel
+  after install (180-day default expiry would silently kick the box off the
+  tailnet).
+- **Cloudflare Tunnel install path:** the dashboard offers connector-type
+  tabs (Docker / Debian / etc.). Picking Debian installed cloudflared as a
+  host systemd service which then competed with the compose `cloudflared`
+  container. Cleanup is `sudo systemctl stop cloudflared && sudo cloudflared
+  service uninstall && sudo rm -f /etc/systemd/system/cloudflared.service &&
+  sudo systemctl daemon-reload`. Always pick the **Docker** tab.
+- **Access apps shipped with 0 policies attached.** This was the single
+  biggest time-sink — the apps existed, the tunnel was healthy, DNS resolved,
+  but every request 302-redirected to `cloudflareaccess.com/cdn-cgi/access/login`.
+  Diagnostic: `curl -sSi` to see headers, look for the `location: ...login`
+  hint and `service_token_status:false` in the JWT meta. Fix: edit each app
+  → Policies tab → Add a policy → save → verify "Policies assigned: 1".
+- **Cloudflare auto-DNS conflict.** If you manually create the `api` CNAME
+  before adding the Published Application route (for instance, while
+  debugging DNS), the route save fails with "A record with that host
+  already exists." Delete the manual record, save the route, Cloudflare
+  recreates an equivalent CNAME with managed-by-tunnel metadata.
+- **Service URL required `http://` prefix** in the new "Published
+  application" form. Plain `hrserv:8000` is rejected by client-side
+  validation; `http://hrserv:8000` works. The schema field disappeared in
+  the 2026 UI redesign.
+- **Local DNS issue on the Mac.** The Mac's home router (10.39.49.3)
+  cached the pre-Cloudflare NXDOMAIN for `api.hrfunc.org` aggressively;
+  even after Cloudflare DNS was correct and `dig @1.1.1.1` resolved, the
+  Mac's default resolver did not. Workaround for smoke tests:
+  `curl --resolve api.hrfunc.org:443:172.67.X.Y https://...`. Permanent
+  fix: point Mac DNS at `1.1.1.1` or wait out the cache.
+- **Docker group lag.** Even after `usermod -aG docker dennys`, some shells
+  (especially `su -`'d shells) didn't pick up the docker group until
+  `newgrp docker` or a full SSH re-login. Symptom: `permission denied
+  while trying to connect to the docker API at unix:///var/run/docker.sock`.
+- **Frontend repo renamed** from `hrfunc-flask-app` to `hrfunc-web` mid-Phase
+  to better describe its scope. The minted API key label `flask-frontend`
+  was kept as-is (historical) since rotating the key wasn't required just
+  to relabel.

@@ -3,7 +3,7 @@
 FastAPI receiver service for HRF JSON uploads from the
 [hrfunc](https://github.com/dennys246/hrfunc) ecosystem.
 
-HRServ replaces `flask.jib-jab.org/upload_json`. The `hrfunc-flask-app` frontend
+HRServ replaces `flask.jib-jab.org/upload_json`. The `hrfunc-web` frontend
 augments each upload with a `_hrf_submission` envelope (submitter email, study,
 DOI, filenames) and forwards it here. HRServ validates, hashes, and persists the
 payload in Postgres.
