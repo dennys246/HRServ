@@ -12,6 +12,11 @@ The MVP is a **receiver only** — no read/query/distribution endpoints yet. The
 schema and the streaming-replica setup are ready for those to land once the
 GitHub-hosted HRF database needs to come online.
 
+**Current status (2026-05):** `hrserv-1` (on jib-jab.org) is live. Phase 2b
+shadow-write is active — every upload through hrfunc.org dual-writes to the
+legacy backend (authoritative) and HRServ (validation shadow). The test
+replica and August Mac Mini cutover land in Phase 2c.
+
 ## Quick reference
 
 | | |
@@ -19,10 +24,18 @@ GitHub-hosted HRF database needs to come online.
 | Public endpoint | `POST https://api.hrfunc.org/upload_json` |
 | Health | `GET https://api.hrfunc.org/healthz` |
 | Auth | Cloudflare Access service token + app `x-api-key` (argon2-hashed) |
-| Topology | Primary + streaming replica over Tailscale |
-| Bootstrap | [BOOTSTRAP.md](BOOTSTRAP.md) |
-| Failover | [docs/FAILOVER.md](docs/FAILOVER.md) |
-| Backup/restore | [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) |
+| Topology | `hrserv-1` only (Phase 2c will add a replica) |
+| Original plan | [BOOTSTRAP.md](BOOTSTRAP.md) |
+| System overview | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Day-to-day ops | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
+| First-node setup | [docs/PHASE_2A_HRSERV1_SETUP.md](docs/PHASE_2A_HRSERV1_SETUP.md) |
+| Adding more nodes | [docs/NEW_NODE_SETUP.md](docs/NEW_NODE_SETUP.md) |
+| Key rotation | [docs/KEY_ROTATION.md](docs/KEY_ROTATION.md) |
+| Shadow validation | [docs/SHADOW_WINDOW.md](docs/SHADOW_WINDOW.md) |
+| Monitoring (not yet wired) | [docs/MONITORING.md](docs/MONITORING.md) |
+| Failover (no replica yet) | [docs/FAILOVER.md](docs/FAILOVER.md) |
+| Backup/restore (not yet wired) | [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) |
+| Deferred items | [docs/FOLLOWUPS.md](docs/FOLLOWUPS.md) |
 | Development standards | [CLAUDE.md](CLAUDE.md) |
 
 ## Local development
@@ -65,7 +78,9 @@ hrserv/
   migrations/0001_init.sql baseline schema
   docker/                  Dockerfile, compose (primary/replica/test), postgres configs
   scripts/                 backup.sh, promote_replica.sh, mint_key.py (thin wrapper)
-  docs/                    FAILOVER.md, BACKUP_RESTORE.md
+  docs/                    ARCHITECTURE, OPERATIONS, NEW_NODE_SETUP, KEY_ROTATION,
+                           SHADOW_WINDOW, MONITORING, PHASE_2A_HRSERV1_SETUP,
+                           FAILOVER, BACKUP_RESTORE, FOLLOWUPS
   tests/                   pytest suite (real Postgres, rolled-back transactions)
   pyproject.toml           uv + ruff + mypy + pytest config
 ```

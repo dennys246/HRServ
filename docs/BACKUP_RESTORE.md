@@ -1,5 +1,22 @@
 # HRServ backup and restore runbook
 
+> **🚨 STATUS (as of 2026-05): NOT YET WIRED UP.** Phase 2a deployed
+> HRServ on a single node with no backups configured. The `scripts/backup.sh`
+> exists but no cron is scheduled, no Backblaze B2 account is set up, and
+> no peer node exists to cross-ship to.
+>
+> **Real exposure today:** if the disk on `jib-jab.org` dies, every
+> `hrf_submissions` row accumulated since shadow went live is lost. The
+> legacy `flask.jib-jab.org` backend remains the authoritative source for
+> all uploads during the shadow window, so its database is still the
+> backup-of-record — but the moment cutover happens (per
+> `docs/SHADOW_WINDOW.md`), this gap becomes critical.
+>
+> **Do NOT cut over to HRServ as authoritative until backups are wired.**
+> This is the single highest-priority follow-up before Phase 2c finishes.
+>
+> The rest of this document describes the TARGET state for Phase 2c.
+
 Backups exist in three places (local node, peer node, Backblaze B2). A backup
 you haven't restored is not a backup — the drill described here is mandatory
 before Phase 3 of the rollout, and should be re-run quarterly.
