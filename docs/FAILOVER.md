@@ -1,5 +1,20 @@
 # HRServ failover runbook
 
+> **🚨 STATUS (as of 2026-05): NOT YET POSSIBLE.** This runbook assumes a
+> production replica exists. As of writing, only `hrserv-1` is deployed.
+> Phase 2c (test replica on a home-built PC) and the August Mac Mini
+> arrival will land the replica that makes this runbook executable.
+>
+> **Current realistic recovery if hrserv-1 dies right now:** stand up a
+> fresh hrserv-1 on whatever hardware you can find, re-run the Phase 2a
+> runbook (`docs/PHASE_2A_HRSERV1_SETUP.md`), and accept the data loss for
+> everything submitted since shadow went live. **The legacy `flask.jib-
+> jab.org` backend is still authoritative** during the shadow window, so
+> its database is the only source of truth that survives.
+>
+> Until Phase 2c lands, also see `docs/BACKUP_RESTORE.md` — backups are
+> similarly aspirational.
+
 When the current primary is unrecoverable, promote the current replica. This
 is a manual process — the wrong promotion at the wrong time produces
 split-brain (two nodes both accepting writes, diverging schemas/rows). Read

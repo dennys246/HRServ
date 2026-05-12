@@ -6,12 +6,18 @@ Project-specific guidance for Claude Code working in this repo.
 
 HRServ is the FastAPI receiver service that replaces `flask.jib-jab.org/upload_json`. It accepts
 HRF JSON uploads from the `hrfunc-web` frontend (pre-augmented with a `_hrf_submission`
-envelope) and persists them in Postgres. Read [BOOTSTRAP.md](BOOTSTRAP.md) for the full plan.
+envelope) and persists them in Postgres. Read [BOOTSTRAP.md](BOOTSTRAP.md) for the original plan
+and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the current system overview.
+
+**Current state (2026-05):** Phase 2b is live — every upload through hrfunc.org dual-writes to
+both the legacy backend (authoritative) and HRServ (shadow). Shadow validation window is running.
+Phase 2c (test replica + backups) is the next big block.
 
 Sibling repos worth knowing about:
 - `/Users/dennyschaedig/Scripts/HRFunc` — the Python library (`pip install hrfunc`) that produces
   the JSON HRServ ingests. May be updated to better suit HRServ; flag rather than work around.
-- `hrfunc-web` — Flask frontend on Render that augments JSON before forwarding here.
+- `/Users/dennyschaedig/Scripts/hrfunc-web` — Flask frontend on Render that augments JSON before
+  forwarding here (and to the legacy backend, during the shadow window).
 
 ## Development standards (hard rules)
 
