@@ -16,7 +16,16 @@ from hrserv.models import HealthResponse
 router = APIRouter(tags=["health"])
 
 
-@router.get("/healthz", response_model=HealthResponse)
+# Both GET and HEAD are accepted per RFC 7231 §4.3.2 — HEAD should be valid
+# wherever GET is. Monitoring tools (UptimeRobot, BetterStack, Pingdom) default
+# to HEAD for efficiency; without this, those probes get 405 even though the
+# endpoint is healthy. Starlette automatically strips the response body for
+# HEAD requests, so the handler implementation stays the same.
+@router.api_route(
+    "/healthz",
+    methods=["GET", "HEAD"],
+    response_model=HealthResponse,
+)
 async def healthz(request: Request) -> JSONResponse:
     """Return 200 when DB reachable, 503 otherwise.
 
