@@ -1,0 +1,69 @@
+[Unit]
+# HRServ stack lifecycle controller.
+#
+# Replaces docker-compose's restart manager as the source of truth for
+# bringing the stack up on boot. The previous setup (restart: unless-stopped
+# on every container) hit a race: dockerd starts before the host network is
+# fully ready (especially on hosts using raw wpa_supplicant + dhclient where
+# network-online.target effectively no-ops), the restart manager brings
+# containers up immediately, and compose's depends_on: service_healthy is
+# IGNORED on restart (it's a compose-up-time directive only). Result:
+# containers race up over a half-ready bridge, hrserv's lifespan can't
+# reach postgres, the container goes unhealthy and stays that way.
+#
+# This unit makes every boot equivalent to a manual `dc down && dc up -d`:
+# ExecStartPre cleans any partial container state the restart manager may
+# have set up, ExecStart runs a clean compose up with depends_on respected.
+#
+# Install on hrserv-1:
+#   sudo cp /opt/hrserv/deploy/hrserv.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable hrserv
+#   sudo systemctl start hrserv
+# (After enabling, remove the existing `dc up -d` from any other boot scripts
+# / .bashrc to avoid duplicate-up races.)
+#
+# Operator note: `systemctl restart hrserv` is DISRUPTIVE — it runs
+# `dc down` (killing in-flight uploads) and then `dc up -d` again. It's the
+# right hammer when the stack is genuinely wedged; it's the WRONG hammer for
+# "I just want to refresh something." For a routine config-pickup, use
+# `dc restart <service>` directly. For boot-clean recovery, this unit IS the
+# `dc down && dc up -d` flow.
+#
+# Coexistence with compose's `restart: unless-stopped`: the two policies have
+# separate jurisdiction by intent —
+#   * systemd unit (this file): owns BOOT ordering. Ensures depends_on is
+#     honored, network is up, etc.
+#   * compose `restart: unless-stopped`: owns RUNTIME crash recovery. If a
+#     container OOMs at 3am, compose brings it back without involving systemd.
+# Don't delete one without thinking through what handles the other case.
+
+Description=HRServ docker-compose stack (clean boot orchestration)
+Documentation=file:///opt/hrserv/docs/OPERATIONS.md
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/hrserv
+User=dennys
+
+# ExecStartPre: clean down BEFORE up. Belt-and-suspenders against the
+# restart-manager racing us; if it's already brought the containers up
+# wrongly, `dc down` flushes them + the bridge, and the subsequent
+# `dc up -d` rebuilds cleanly with depends_on honored. No -v flag: the
+# named Postgres volume must survive.
+ExecStartPre=/usr/bin/docker compose -f /opt/hrserv/docker/docker-compose.primary.yml down --remove-orphans
+ExecStart=/usr/bin/docker compose -f /opt/hrserv/docker/docker-compose.primary.yml up -d
+ExecStop=/usr/bin/docker compose -f /opt/hrserv/docker/docker-compose.primary.yml down
+
+# 5 minutes is plenty for image pulls + container start + healthchecks.
+# Postgres first boot needs ~10-20s; hrserv's create_pool_with_retry
+# can take up to ~2 minutes if the bridge is slow to settle.
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

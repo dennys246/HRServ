@@ -51,9 +51,20 @@ USER hrserv
 EXPOSE 8000
 
 # Healthcheck the container itself by hitting /healthz over loopback.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# `--start-period=180s` covers the full create_pool_with_retry budget
+# (1+2+3+5+8+13+21+30+30+30 = 143s) plus slack. Without this margin, the
+# container can be marked unhealthy mid-retry-loop (~60s into boot) even
+# though the lifespan is still legitimately trying to come up. Was 10s
+# originally; bumped to 60s, then 180s after seeing the retry tail exceed
+# the prior margin under bridge-flap scenarios on jib-jab.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
     CMD python -c "import urllib.request,sys; \
 sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)" \
     || exit 1
 
-CMD ["uvicorn", "hrserv.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# --workers=1: at HRF-upload volume there's zero throughput need for >1
+# worker, and uvicorn's multi-worker master has known partial-startup edge
+# cases (one worker's lifespan succeeds while another's fails). A single
+# worker makes startup deterministic. See docs/FOLLOWUPS.md for the
+# "when to re-enable multi-worker" trigger.
+CMD ["uvicorn", "hrserv.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

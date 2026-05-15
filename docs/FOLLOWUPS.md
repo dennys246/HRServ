@@ -351,3 +351,83 @@ Flask block anyway.
 
 **Resolve when:** Post-cutover when the old Flask service is retired and
 nginx config gets cleaned up in one sweep.
+
+---
+
+# Added 2026-05-15 — surfaced by the reboot-resilience root-cause review
+
+## Re-enable multi-worker uvicorn when user count justifies it
+
+**Where:** `docker/Dockerfile` CMD — currently `--workers 1`.
+
+**Symptom (today, none):** We're running a single uvicorn worker per the
+reboot-resilience fix. uvicorn's two-worker master had known partial-
+startup edge cases (one worker's lifespan succeeds while another's fails
+with no clear logs), and HRF upload volume is tiny — sparse academic
+submissions, not bursty traffic. Single worker is more deterministic and
+easier to debug.
+
+**Why deferred:** Performance is a non-issue at today's load. The point
+of `--workers 1` is *startup determinism*, not throughput. We pay the
+performance cost only if traffic actually grows beyond one worker's
+capacity.
+
+**Resolve when:** ANY of the following triggers fire:
+
+1. **Sustained request rate exceeds ~5/sec** for more than a minute.
+   Check via `dc logs hrserv | grep -c "POST /upload_json" && date` over
+   a window. At our latency (~200ms per request including argon2 verify
+   + Postgres roundtrip), 5 req/sec saturates a single worker.
+2. **A bulk-upload feature is introduced** (e.g., a "submit batch of HRFs"
+   UI in hrfunc-web, or scripted ingestion from a research collaborator
+   processing many sessions). Any feature that could plausibly generate
+   parallel uploads is a trigger.
+3. **HRServ becomes the entry point for read endpoints** (per
+   BOOTSTRAP.md "future read endpoints"). Read traffic patterns are
+   typically more concurrent than write; multiple workers become useful.
+4. **You observe `slow_request` patterns** in logs where a long-running
+   request blocks subsequent ones — that's worker exhaustion, and the
+   fix is more workers (or async-only request handling end-to-end).
+
+**Fix sketch when the trigger fires:**
+
+- Update `docker/Dockerfile`: switch `--workers 1` → `--workers 2` (or
+  more, but probably no more than `2 * CPU_cores + 1` per gunicorn
+  conventions; on jib-jab that's likely 4-8).
+- Either pin uvicorn to a version with clean multi-worker lifespan
+  semantics, OR switch to gunicorn + uvicorn workers (industry standard
+  for prod Python ASGI). Gunicorn handles worker lifecycle more
+  predictably.
+  - If switching to gunicorn: add `gunicorn` to `pyproject.toml`
+    dependencies, change CMD to
+    `gunicorn hrserv.main:create_app --factory --bind 0.0.0.0:8000
+    --worker-class uvicorn.workers.UvicornWorker --workers 4
+    --timeout 60 --graceful-timeout 30`.
+- Test under sustained load before merge (locally with `hey` or `wrk`
+  against a docker-compose.test setup).
+- Make sure the connection pool's `max_size` is bumped proportionally:
+  `db_pool_max_size` should be >= `workers * 4` so each worker has
+  multiple connections available without contention.
+- Re-test the boot-resilience scenario — the multi-worker lifespan race
+  could come back. Verify with an intentional Postgres-not-ready start.
+
+**Note on `--reload` and dev:** None of this affects local development.
+`uv run uvicorn hrserv.main:create_app --factory --reload` is single-
+worker anyway. The change is production-only.
+
+## Boot-resilience: monitor for "all retries exhausted" log line
+
+**Where:** `hrserv/db.py` `create_pool_with_retry`.
+
+**Symptom (today, none):** The retry loop logs WARNING per failed
+attempt and ERROR if it exhausts all retries before raising. If the
+ERROR ever fires in production, it means create_pool failed for ~2
+minutes straight — which is a real outage worth alerting on.
+
+**Why deferred:** No external alerting / log-monitoring beyond
+UptimeRobot today. UptimeRobot will catch the symptom (`/healthz` down
+for ~2 min) but won't tell us why.
+
+**Resolve when:** Setting up structured log shipping / alerting (Phase
+2c or later). Add a specific alert rule for the ERROR log line:
+`grep -E "create_pool failed after.*attempts"`.

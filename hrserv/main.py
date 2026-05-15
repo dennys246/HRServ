@@ -12,7 +12,7 @@ from fastapi.responses import PlainTextResponse
 
 from hrserv import __version__
 from hrserv.config import Settings, load_settings
-from hrserv.db import close_pool, create_pool
+from hrserv.db import close_pool, create_pool_with_retry
 from hrserv.routes import health, ingest
 
 logger = logging.getLogger("hrserv.main")
@@ -60,7 +60,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        pool = await create_pool(
+        # Use the retry wrapper so the lifespan tolerates a brief
+        # Postgres-not-ready / bridge-flapping window at boot. Without retry,
+        # a single OSError during the network-not-yet-stable boot window
+        # crashes the lifespan, leaves app.state.pool unset, and the
+        # container goes unhealthy until a manual `dc down && dc up -d`.
+        # See docs/OPERATIONS.md "Symptom: Cloudflare 502 after a host reboot".
+        pool = await create_pool_with_retry(
             settings.database_url,
             min_size=settings.db_pool_min_size,
             max_size=settings.db_pool_max_size,

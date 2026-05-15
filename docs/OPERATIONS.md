@@ -204,60 +204,62 @@ If the container is up but unregistered: rotate the tunnel token via the
 Cloudflare dashboard and update `TUNNEL_TOKEN` in `docker/.env`, then
 `dc up -d cloudflared`.
 
-### Symptom: Cloudflare 502 (or 1033) after a host reboot / network change
+### Symptom: Cloudflare 502 or 503 after a host reboot / network change
 
-This bit us on 2026-05-15 — jib-jab was physically relocated, WiFi
-reconnected, but `hrserv` came back as "unhealthy" even though
-`cloudflared` and `postgres` containers were healthy. External requests
-got Cloudflare 502 (cloudflared reaches `hrserv:8000` but hrserv's
-healthcheck against its own `/healthz` failed because hrserv couldn't
-reach postgres over the compose internal network).
+Recurred on 2026-05-15 after jib-jab was physically relocated. Symptom:
+`cloudflared` and `postgres` containers report healthy, but `hrserv` is
+`unhealthy`. External requests get Cloudflare 502.
 
-**Cause:** the Docker bridge network (`hrserv_internal`) can land in a
-stale state across host network changes — TCP between containers stops
-working even though each container is individually running. The
-healthcheck flaps, cloudflared returns 502, real uploads fail.
+**Root cause** (identified after parallel review): docker's restart
+manager brings containers up before the host network is fully ready AND
+bypasses compose's `depends_on: service_healthy` gate. hrserv's lifespan
+tries to dial postgres over a half-ready bridge, `create_pool` raises,
+and the container goes unhealthy. `dc restart hrserv` doesn't fix it
+because (a) restart doesn't re-trigger depends_on gating and (b) the
+broken pool state may persist across the restart.
 
-**Diagnostic — confirm the bridge is broken:**
+**Permanent fix shipped on `fix/reboot-resilience` branch (commit-ref
+when this lands):**
+1. `hrserv/main.py` lifespan uses `create_pool_with_retry` (10 attempts
+   with 1→30s backoff, ~2 minutes total).
+2. `hrserv/db.py` `create_pool` sets `command_timeout=30s` and
+   `max_inactive_connection_lifetime=30s` so stale TCP sockets are
+   recycled aggressively.
+3. Dockerfile healthcheck `--start-period=60s` (was 10s) gives the retry
+   loop room to succeed.
+4. Dockerfile CMD `--workers 1` (was 2) eliminates uvicorn's
+   multi-worker partial-startup edge cases.
+5. New `deploy/hrserv.service` systemd unit replaces `restart:
+   unless-stopped` as the boot-time controller. Runs `dc down` then
+   `dc up -d` after `network-online.target`, so every boot is equivalent
+   to the working manual recovery.
 
+**Retroactive install on hrserv-1** (after this PR merges):
 ```bash
-# Should connect instantly. If it hangs, the bridge is the culprit.
-dc exec hrserv python -c \
-  "import socket; s=socket.create_connection(('postgres', 5432), timeout=5); print('TCP ok'); s.close()"
+cd /opt/hrserv
+git pull --ff-only origin main
+sudo cp deploy/hrserv.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable hrserv
+# Don't `systemctl start` yet — that would dc down + up while you're
+# in this terminal. Instead, the next host reboot will pick it up.
+
+# Rebuild the hrserv image to pick up the Dockerfile changes:
+dc build hrserv
+dc up -d hrserv     # picks up the retry + timeouts + workers=1 changes
 ```
 
-**Fix — clean stack reset:**
+After install, the manual `dc down && dc up -d` recovery should become
+rare. If you do still see this symptom, follow the legacy procedure:
 
 ```bash
 cd /opt/hrserv
-dc down       # NO -v. Named volumes (pg_data_primary) persist.
+dc down          # NO -v flag. Named volumes persist.
 sleep 3
 dc up -d
-sleep 15
-dc ps         # all three Up (healthy) within ~30s
+sleep 30         # give the retry loop time
+dc ps
 ```
-
-This recreates the bridge fresh. Postgres data survives because it's in a
-named volume, not a bind mount.
-
-If `dc down && dc up -d` doesn't fix it, escalate to `sudo systemctl
-restart docker` then `dc up -d`. Rarely needed.
-
-**Important:** try this BEFORE suspecting recent code changes or
-rebuilding images. On 2026-05-15 we initially blamed a recent PR (`HEAD`
-support on `/healthz`) and chased asyncpg SSL behavior for ~20 minutes
-before realizing the bridge itself was the problem. Bridge resets are
-cheap; image rebuilds are not.
-
-**Why this happens specifically on jib-jab:** the box is mobile and
-occasionally physically relocated. Each move triggers WiFi reconnect (no
-NetworkManager — see `docs/MONITORING.md` for the manual procedure) and
-Docker bridge state can desync during the host's network outage. Future
-Mac Mini (`hrserv-2`) at a fixed location will see this far less.
-
-**While recovering:** if you can't sort it in ~15 min, **rollback to
-legacy Flask** by flipping `HRFUNC_UPLOAD_URL` + `HRFUNC_API_KEY` on
-Render. Buys time without users seeing failures.
 
 ### Symptom: a researcher reports "Upload failed: Invalid API key"
 
