@@ -204,6 +204,63 @@ If the container is up but unregistered: rotate the tunnel token via the
 Cloudflare dashboard and update `TUNNEL_TOKEN` in `docker/.env`, then
 `dc up -d cloudflared`.
 
+### Symptom: Cloudflare 502 or 503 after a host reboot / network change
+
+Recurred on 2026-05-15 after jib-jab was physically relocated. Symptom:
+`cloudflared` and `postgres` containers report healthy, but `hrserv` is
+`unhealthy`. External requests get Cloudflare 502.
+
+**Root cause** (identified after parallel review): docker's restart
+manager brings containers up before the host network is fully ready AND
+bypasses compose's `depends_on: service_healthy` gate. hrserv's lifespan
+tries to dial postgres over a half-ready bridge, `create_pool` raises,
+and the container goes unhealthy. `dc restart hrserv` doesn't fix it
+because (a) restart doesn't re-trigger depends_on gating and (b) the
+broken pool state may persist across the restart.
+
+**Permanent fix shipped on `fix/reboot-resilience` branch (commit-ref
+when this lands):**
+1. `hrserv/main.py` lifespan uses `create_pool_with_retry` (10 attempts
+   with 1→30s backoff, ~2 minutes total).
+2. `hrserv/db.py` `create_pool` sets `command_timeout=30s` and
+   `max_inactive_connection_lifetime=30s` so stale TCP sockets are
+   recycled aggressively.
+3. Dockerfile healthcheck `--start-period=60s` (was 10s) gives the retry
+   loop room to succeed.
+4. Dockerfile CMD `--workers 1` (was 2) eliminates uvicorn's
+   multi-worker partial-startup edge cases.
+5. New `deploy/hrserv.service` systemd unit replaces `restart:
+   unless-stopped` as the boot-time controller. Runs `dc down` then
+   `dc up -d` after `network-online.target`, so every boot is equivalent
+   to the working manual recovery.
+
+**Retroactive install on hrserv-1** (after this PR merges):
+```bash
+cd /opt/hrserv
+git pull --ff-only origin main
+sudo cp deploy/hrserv.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable hrserv
+# Don't `systemctl start` yet — that would dc down + up while you're
+# in this terminal. Instead, the next host reboot will pick it up.
+
+# Rebuild the hrserv image to pick up the Dockerfile changes:
+dc build hrserv
+dc up -d hrserv     # picks up the retry + timeouts + workers=1 changes
+```
+
+After install, the manual `dc down && dc up -d` recovery should become
+rare. If you do still see this symptom, follow the legacy procedure:
+
+```bash
+cd /opt/hrserv
+dc down          # NO -v flag. Named volumes persist.
+sleep 3
+dc up -d
+sleep 30         # give the retry loop time
+dc ps
+```
+
 ### Symptom: a researcher reports "Upload failed: Invalid API key"
 
 That message comes from the legacy backend (currently authoritative), not

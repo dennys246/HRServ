@@ -379,6 +379,31 @@ That almost certainly means an Access app has "Policies assigned: 0". Go
 back to Step 5 and verify both apps have their policies attached. This was
 the single most common Step 9 failure during the original Phase 2a run.
 
+## 9a. Install the systemd unit for clean boot ordering
+
+Without this, every host reboot leaves the stack in a bad state because
+Docker's restart manager races the network and ignores compose's
+`depends_on` gating. Install the unit ONCE and reboots become clean:
+
+```bash
+cd /opt/hrserv
+sudo cp deploy/hrserv.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable hrserv
+# Don't `systemctl start hrserv` from the same terminal you used
+# `dc up -d` from — the unit would `dc down` your running stack. The
+# next host reboot picks it up naturally. Or `systemctl start hrserv`
+# from a separate terminal once you've verified the live stack is
+# behaving and you want to test the unit semantics.
+```
+
+The unit runs `dc down && dc up -d` on every boot, so containers always
+come up via compose (not via Docker's restart manager) with depends_on
+respected.
+
+See `docs/OPERATIONS.md` "Symptom: Cloudflare 502 or 503 after a host
+reboot" for the full root-cause story.
+
 ## 10. Mint the frontend's API key
 
 ```bash
