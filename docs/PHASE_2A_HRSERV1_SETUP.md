@@ -379,11 +379,57 @@ That almost certainly means an Access app has "Policies assigned: 0". Go
 back to Step 5 and verify both apps have their policies attached. This was
 the single most common Step 9 failure during the original Phase 2a run.
 
-## 9a. Install the systemd unit for clean boot ordering
+## 9a. Wire the boot chain so reboots come up clean
 
-Without this, every host reboot leaves the stack in a bad state because
-Docker's restart manager races the network and ignores compose's
-`depends_on` gating. Install the unit ONCE and reboots become clean:
+Three layered fixes are needed for a node to come back from cold reboot
+without manual intervention. Skip any of them and the stack will fail
+mid-boot in a way that requires you to log in and `dc up -d` manually.
+
+### 9a.i — Make WiFi auto-connect at boot (install NetworkManager)
+
+If you're on Ethernet, skip — Ethernet usually auto-comes-up via systemd-
+networkd or similar. For WiFi-only nodes (like jib-jab) without
+NetworkManager, `wpa_supplicant`+`dhclient` only run if a logged-in user
+manually starts them. Reboot → no network → nothing else works.
+
+```bash
+sudo apt update
+sudo apt install network-manager
+sudo systemctl enable NetworkManager
+sudo systemctl enable NetworkManager-wait-online
+
+# Configure your WiFi as auto-connecting:
+sudo nmcli device wifi connect "YOUR_SSID" password "YOUR_PASSWORD"
+
+# Verify auto-connect is on for that connection:
+nmcli -g connection.autoconnect connection show "YOUR_SSID"
+# Should print: yes
+```
+
+Reboot once to confirm WiFi comes up before you log in (`ssh` from
+another machine should succeed without you logging into the box first).
+
+### 9a.ii — Make Docker wait for Tailscale
+
+Postgres binds the tailnet IP (`${TAILSCALE_IP}:5432:5432` in the compose
+file). Without ordering, Docker tries to start that container before
+tailscaled has assigned the tailnet IP → port allocation fails →
+containerd kills the container. Install the drop-in unit:
+
+```bash
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo cp /opt/hrserv/deploy/docker.service.d/wait-for-tailscale.conf \
+    /etc/systemd/system/docker.service.d/
+sudo systemctl daemon-reload
+```
+
+Takes effect on next reboot.
+
+### 9a.iii — Install the HRServ stack systemd unit
+
+This unit runs `dc down && dc up -d` after both `network-online.target`
+AND `tailscaled.service` are up — guaranteeing compose's
+`depends_on: service_healthy` gating is honored on every boot:
 
 ```bash
 cd /opt/hrserv
@@ -392,17 +438,23 @@ sudo systemctl daemon-reload
 sudo systemctl enable hrserv
 # Don't `systemctl start hrserv` from the same terminal you used
 # `dc up -d` from — the unit would `dc down` your running stack. The
-# next host reboot picks it up naturally. Or `systemctl start hrserv`
-# from a separate terminal once you've verified the live stack is
-# behaving and you want to test the unit semantics.
+# next host reboot picks it up naturally.
 ```
 
-The unit runs `dc down && dc up -d` on every boot, so containers always
-come up via compose (not via Docker's restart manager) with depends_on
-respected.
+### Verify
 
-See `docs/OPERATIONS.md` "Symptom: Cloudflare 502 or 503 after a host
-reboot" for the full root-cause story.
+After all three are installed, reboot the box. From another machine:
+```bash
+# Wait ~60 seconds after issuing reboot, then:
+curl -sS https://api.hrfunc.org/healthz
+# Expect: {"status":"ok","db":true,"node_role":"primary"} on first try.
+# If you get 502/503, see docs/OPERATIONS.md.
+```
+
+You should NOT need to SSH in and `dc up -d`. If you do, one of the
+three layers above didn't install cleanly — see
+`docs/OPERATIONS.md` "Symptom: Cloudflare 502 or 503 after a host reboot"
+for the full root-cause story.
 
 ## 10. Mint the frontend's API key
 

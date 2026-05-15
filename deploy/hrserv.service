@@ -40,8 +40,16 @@
 
 Description=HRServ docker-compose stack (clean boot orchestration)
 Documentation=file:///opt/hrserv/docs/OPERATIONS.md
-After=docker.service network-online.target
-Wants=docker.service network-online.target
+# docker-compose.primary.yml binds Postgres on the Tailscale interface
+# (${TAILSCALE_IP}:5432), so the tailnet IP MUST be assigned before
+# `dc up -d` runs — otherwise container port allocation fails and
+# containerd kills the container before we can recover. tailscaled is
+# also the gate for the eventual streaming replication peer to dial in.
+# `tailscaled.service` is Tailscale's own systemd unit (installed by the
+# tailscale apt package); if it's not enabled / not installed, this
+# `Wants=` is a no-op rather than a hard error.
+After=docker.service network-online.target tailscaled.service
+Wants=docker.service network-online.target tailscaled.service
 Requires=docker.service
 
 [Service]
