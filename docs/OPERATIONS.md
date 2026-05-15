@@ -234,19 +234,38 @@ when this lands):**
    `dc up -d` after `network-online.target`, so every boot is equivalent
    to the working manual recovery.
 
-**Retroactive install on hrserv-1** (after this PR merges):
+**Retroactive install on hrserv-1** (after this PR merges) — three layers,
+ALL needed. Skip any one and the same outage recurs:
+
 ```bash
 cd /opt/hrserv
 git pull --ff-only origin main
+
+# (1) WiFi must auto-connect at boot — install NetworkManager if not present.
+# Skip if the node is on Ethernet or already has working network-online.target.
+sudo apt install -y network-manager
+sudo systemctl enable NetworkManager NetworkManager-wait-online
+sudo nmcli device wifi connect "SSID" password "PASSWORD"   # save it as auto-connect
+
+# (2) Make Docker wait for Tailscale to assign the tailnet IP before
+# trying to bind it on Postgres' container.
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo cp deploy/docker.service.d/wait-for-tailscale.conf \
+    /etc/systemd/system/docker.service.d/
+sudo systemctl daemon-reload
+
+# (3) HRServ stack systemd unit (runs `dc down && dc up -d` after the
+# network is fully up, replacing reliance on compose's restart policy
+# for boot ordering only):
 sudo cp deploy/hrserv.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable hrserv
 # Don't `systemctl start` yet — that would dc down + up while you're
-# in this terminal. Instead, the next host reboot will pick it up.
+# in this terminal. The next host reboot picks it up.
 
 # Rebuild the hrserv image to pick up the Dockerfile changes:
 dc build hrserv
-dc up -d hrserv     # picks up the retry + timeouts + workers=1 changes
+dc up -d hrserv     # picks up retry + timeouts + workers=1
 ```
 
 After install, the manual `dc down && dc up -d` recovery should become
