@@ -204,6 +204,61 @@ If the container is up but unregistered: rotate the tunnel token via the
 Cloudflare dashboard and update `TUNNEL_TOKEN` in `docker/.env`, then
 `dc up -d cloudflared`.
 
+### Symptom: Cloudflare 502 (or 1033) after a host reboot / network change
+
+This bit us on 2026-05-15 — jib-jab was physically relocated, WiFi
+reconnected, but `hrserv` came back as "unhealthy" even though
+`cloudflared` and `postgres` containers were healthy. External requests
+got Cloudflare 502 (cloudflared reaches `hrserv:8000` but hrserv's
+healthcheck against its own `/healthz` failed because hrserv couldn't
+reach postgres over the compose internal network).
+
+**Cause:** the Docker bridge network (`hrserv_internal`) can land in a
+stale state across host network changes — TCP between containers stops
+working even though each container is individually running. The
+healthcheck flaps, cloudflared returns 502, real uploads fail.
+
+**Diagnostic — confirm the bridge is broken:**
+
+```bash
+# Should connect instantly. If it hangs, the bridge is the culprit.
+dc exec hrserv python -c \
+  "import socket; s=socket.create_connection(('postgres', 5432), timeout=5); print('TCP ok'); s.close()"
+```
+
+**Fix — clean stack reset:**
+
+```bash
+cd /opt/hrserv
+dc down       # NO -v. Named volumes (pg_data_primary) persist.
+sleep 3
+dc up -d
+sleep 15
+dc ps         # all three Up (healthy) within ~30s
+```
+
+This recreates the bridge fresh. Postgres data survives because it's in a
+named volume, not a bind mount.
+
+If `dc down && dc up -d` doesn't fix it, escalate to `sudo systemctl
+restart docker` then `dc up -d`. Rarely needed.
+
+**Important:** try this BEFORE suspecting recent code changes or
+rebuilding images. On 2026-05-15 we initially blamed a recent PR (`HEAD`
+support on `/healthz`) and chased asyncpg SSL behavior for ~20 minutes
+before realizing the bridge itself was the problem. Bridge resets are
+cheap; image rebuilds are not.
+
+**Why this happens specifically on jib-jab:** the box is mobile and
+occasionally physically relocated. Each move triggers WiFi reconnect (no
+NetworkManager — see `docs/MONITORING.md` for the manual procedure) and
+Docker bridge state can desync during the host's network outage. Future
+Mac Mini (`hrserv-2`) at a fixed location will see this far less.
+
+**While recovering:** if you can't sort it in ~15 min, **rollback to
+legacy Flask** by flipping `HRFUNC_UPLOAD_URL` + `HRFUNC_API_KEY` on
+Render. Buys time without users seeing failures.
+
 ### Symptom: a researcher reports "Upload failed: Invalid API key"
 
 That message comes from the legacy backend (currently authoritative), not
