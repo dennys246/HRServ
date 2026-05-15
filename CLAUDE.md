@@ -104,6 +104,30 @@ to get a throwaway Postgres on a non-default port, then export `DATABASE_URL` an
   Schema migrations apply to both nodes via WAL — never run DDL on the replica.
 - Failover is manual via `scripts/promote_replica.sh` and the runbook in `docs/FAILOVER.md`.
 
+## Production troubleshooting heuristics
+
+When the user reports HRServ is broken in production, work the diagnosis in this order
+BEFORE suspecting recent PRs / code:
+
+1. **502 / 1033 from Cloudflare after a host reboot or network change → Docker bridge.**
+   `jib-jab` is mobile and occasionally relocated. After WiFi reconnect or a reboot,
+   the Docker bridge can land in a stale state where hrserv↔postgres TCP stops working
+   even though all containers are individually running. Symptom: `dc ps` shows `hrserv`
+   as unhealthy while `cloudflared` and `postgres` are healthy. **First fix: `dc down && dc up -d`.**
+   Named volumes persist so no data loss. Escalation: `sudo systemctl restart docker`.
+   See `docs/OPERATIONS.md` §"Symptom: Cloudflare 502 (or 1033) after a host reboot / network change".
+   **Try this before chasing recent merged PRs as the cause** — we wasted ~20 minutes on
+   2026-05-15 doing the latter when it was the bridge.
+2. **502 / 1033 with no recent host change → cloudflared specifically.**
+   `dc logs cloudflared --tail 30` to confirm registered tunnel connections.
+3. **`Internal server error` from HRServ (not Cloudflare 502) → check `dc logs hrserv`.**
+   Usually Postgres reachable but query failing, or asyncpg pool exhausted.
+
+`jib-jab` WiFi specifics (no NetworkManager — see `project_jib_jab_network.md` memory file):
+- Interface `wlp5s0` (Intel AX200), connected via raw `wpa_supplicant` + `dhclient`.
+- After a relocation, the user has to manually rebuild the connection — `nmcli`/`nmtui`
+  aren't installed.
+
 ## Things to NOT do (per bootstrap)
 
 - No read/list/search endpoints in MVP. Schema is ready; endpoints land when distribution is needed.
