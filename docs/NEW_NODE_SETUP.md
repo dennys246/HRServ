@@ -25,8 +25,12 @@ as production replica.
 
 Before starting, on the new box:
 
-- Linux (x86_64 or arm64) or macOS — both have arm64/x86_64 Docker images
-  for everything we use.
+- **Linux** (x86_64 or arm64) — full procedure including boot-chain orchestration
+  (Step 9.5) is supported. Debian 13 (Trixie) is the reference distribution.
+- **macOS** — Docker images work, but the systemd-based boot-chain in Step 9.5
+  has no direct equivalent (macOS uses launchd). Manual `docker compose up`
+  works for initial validation; reboot-clean orchestration on Mac needs a
+  separate launchd plist not yet written. See `docs/FOLLOWUPS.md` FU-1.
 - Network access to Cloudflare (outbound HTTPS + QUIC on 443) and the
   Tailscale coordination server.
 - ~10 GB free disk for Docker + Postgres data + JSON content. More if
@@ -280,6 +284,80 @@ Expected log signals:
 - `postgres`: lines about `started streaming WAL from primary at ...`
 - `hrserv`: `HRServ 0.1.0 started; node_role=replica db_pool=1-8`
 - `cloudflared`: `Registered tunnel connection` (4 entries)
+
+## Step 9.5 — Wire the boot chain for clean reboots (Linux only)
+
+The replica's `docker-compose.replica.yml` also binds Postgres to
+`${TAILSCALE_IP}:5432:5432`, so it inherits the exact same boot race that
+hit jib-jab on 2026-05-16: Docker starts before tailscaled finishes
+assigning the tailnet IP → port allocation fails → containerd kills the
+container → manual `systemctl restart` needed to recover.
+
+This step installs the same three-layer boot orchestration that
+`PHASE_2A_HRSERV1_SETUP.md` §9a uses on hrserv-1. Skip on macOS until the
+launchd equivalent lands (`docs/FOLLOWUPS.md` FU-1).
+
+### 9.5.i — WiFi auto-connect at boot (Debian)
+
+If this box is on WiFi (not wired), install NetworkManager so the WiFi
+profile comes up automatically at boot:
+
+```bash
+sudo apt install -y network-manager
+sudo nmcli device wifi connect "<SSID>" password "<PWD>"
+sudo nmcli connection modify "<SSID>" 802-11-wireless.cloned-mac-address permanent
+sudo nmcli connection modify "<SSID>" 802-11-wireless.powersave 2
+sudo systemctl mask networking
+sudo chmod -x /etc/wpa_supplicant/ifupdown.sh
+```
+
+Why all those steps: see `docs/NETWORK_TROUBLESHOOTING.md` — bad WiFi boot
+state can mimic dozens of unrelated symptoms.
+
+### 9.5.ii — Make Docker wait for Tailscale
+
+```bash
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo cp /opt/hrserv/deploy/docker.service.d/wait-for-tailscale.conf \
+    /etc/systemd/system/docker.service.d/
+sudo systemctl daemon-reload
+```
+
+This installs `tailscale wait` as an ExecStartPre on docker.service with
+`TimeoutStartSec=120`. Docker won't start until `tailscale0` is bindable,
+and if Tailscale stays unhealthy for >2 minutes the unit fails cleanly
+rather than hanging boot.
+
+**Precondition before install**: verify `which tailscale` returns
+`/usr/bin/tailscale` (apt-installed). If Tailscale is installed via static
+binary or another path, edit the drop-in's `ExecStartPre=` line to match
+before copying.
+
+### 9.5.iii — Install the HRServ stack systemd unit
+
+```bash
+cd /opt/hrserv
+sudo cp deploy/hrserv.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable hrserv
+# Don't `systemctl start hrserv` from the same terminal you used
+# `dc up -d` from in Step 9 — the unit would `dc down` your running stack.
+# The next host reboot picks it up naturally.
+```
+
+### Verify with a deliberate reboot
+
+```bash
+sudo reboot
+# Wait ~60-90 seconds, then SSH back in and:
+systemctl status hrserv          # active (exited) — stack came up clean
+docker compose -f docker/docker-compose.replica.yml ps   # all three healthy
+journalctl -u docker -b 0 | grep 'tailscale wait'        # drop-in fired at boot
+```
+
+If `hrserv.service` is `failed` after reboot, see
+`docs/NETWORK_TROUBLESHOOTING.md` "SSH from Mac to jib-jab is hanging" — the
+diagnostic ladder there applies to any reboot-clean failure on the boot chain.
 
 ## Step 10 — Verify replication is healthy
 

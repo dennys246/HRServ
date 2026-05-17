@@ -158,6 +158,10 @@ monitoring**. Concrete recommendations, in priority order:
 
 ## Things that go wrong
 
+> **Can't even SSH to jib-jab?** See [docs/NETWORK_TROUBLESHOOTING.md](NETWORK_TROUBLESHOOTING.md) —
+> covers the SSH-hangs / packets-vanish / fail2ban-banned-me class of issues that block you
+> from running any of the diagnostics below.
+
 ### Symptom: hrserv-web upload returns "Internal server error"
 
 Most likely cause: HRServ container crashed or Postgres is down.

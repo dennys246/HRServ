@@ -431,3 +431,77 @@ for ~2 min) but won't tell us why.
 **Resolve when:** Setting up structured log shipping / alerting (Phase
 2c or later). Add a specific alert rule for the ERROR log line:
 `grep -E "create_pool failed after.*attempts"`.
+
+## Mac Mini (hrserv-2) launchd boot orchestration
+
+**Where:** The Mac Mini arriving August 2026 (Phase 2c+).
+
+**Why deferred:** The current boot chain is Debian/Linux-specific —
+`hrserv.service` (systemd unit), `wait-for-tailscale.conf` (systemd
+drop-in), and `chmod -x /etc/wpa_supplicant/ifupdown.sh` (Debian
+ifupdown). macOS uses launchd and doesn't have any of those.
+
+**What needs to be written:**
+- `deploy/launchd/com.hrfunc.hrserv.plist` — equivalent of `hrserv.service`.
+  Runs `docker compose down && docker compose up -d` after Tailscale is ready.
+- `deploy/launchd/com.hrfunc.docker-wait-for-tailscale.plist` — equivalent
+  of the wait-for-tailscale drop-in. Probably an `OnDemand=false`
+  LaunchDaemon that blocks until `/Applications/Tailscale.app/Contents/MacOS/Tailscale wait`
+  returns, then signals Docker to start.
+
+**Resolve when:** Mac Mini is racked. Cross-reference
+`docs/NEW_NODE_SETUP.md` Step 9.5 — the macOS version of that step should
+be drafted before the Mac Mini first reboots in production.
+
+## cloudflared boot race audit
+
+**Where:** `docker/docker-compose.primary.yml` cloudflared container.
+
+**Symptom (today, none observed):** Cloudflared dials out over the
+host's default route (not Tailscale), so it doesn't share the
+tailscale-IP-not-yet-assigned race. But it `depends_on: hrserv` in
+compose, which is up-time-only ordering — if hrserv is slow to come up
+and cloudflared starts in parallel, cloudflared retries the upstream
+connection until hrserv is healthy. Worth verifying this retry loop is
+real and doesn't have an inverse race that would manifest only at boot.
+
+**Why deferred:** No observed failure mode. The wait-for-tailscale fix
+on docker.service applies to the daemon, so cloudflared also benefits
+from waiting for tailscale before starting — but the question is
+specifically about hrserv-becoming-healthy timing for cloudflared.
+
+**Resolve when:** Investigate after the next clean reboot — run
+`docker compose logs cloudflared --since 2m` and look for any
+"connection refused" / "no such host" lines during boot.
+
+## Documentation discoverability: index in README
+
+**Where:** `README.md` (project root).
+
+**Why deferred:** The repo has accumulated ~10 docs in `docs/` and they
+aren't indexed from the README. A future operator landing on the repo
+fresh wouldn't know `docs/NETWORK_TROUBLESHOOTING.md` exists.
+
+**What to add:** A short "Documentation" section in README.md linking
+to each doc with a one-line description. Cross-link from CLAUDE.md too.
+
+**Resolve when:** Any tidy-up PR. Low-priority since current operators
+(just Denny) know where things are.
+
+## Tailscale key expiry calendar reminder
+
+**Where:** jib-jab's Tailscale node key, deadline ~2026-11-07.
+
+**Symptom if expired:** `tailscale wait` (now installed via the
+docker.service drop-in) blocks until `TimeoutStartSec=120` fires,
+docker.service fails, hrserv.service fails, no HRServ until manual
+intervention. The 120s bound makes this a clean failure (not infinite
+hang) but it's still an outage.
+
+**Why deferred:** Calendar item, not code. Already in
+`project_jib_jab_2026_05_15_outage.md` memory but worth tracking here
+too.
+
+**Resolve when:** Calendar reminder for 2026-10-15 to either:
+1. Disable key expiry in Tailscale admin (preferred for servers), or
+2. Manually re-auth jib-jab via `sudo tailscale up`.
