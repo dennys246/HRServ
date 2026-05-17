@@ -51,6 +51,9 @@ docker compose -f docker/docker-compose.test.yml up -d
 export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55432/hrserv_test
 export NODE_ROLE=primary                 # required (no default) so misconfigured nodes fail to start
 export REQUIRE_CF_ACCESS_HEADERS=false   # the Access edge isn't in front of us locally
+# Optional: override allowed CORS origins for /healthz polling (CSV).
+# Defaults to https://hrfunc.org,https://www.hrfunc.org,http://localhost:5000
+# export CORS_ORIGINS="https://hrfunc.org,https://www.hrfunc.org"
 
 # Run lint, types, tests.
 uv run ruff check .

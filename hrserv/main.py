@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
 from hrserv import __version__
@@ -91,6 +92,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         description="Receiver service for HRF JSON uploads.",
         lifespan=lifespan,
+    )
+
+    # CORS is scoped to safe, idempotent methods so widening cors_origins can
+    # never expose POST /upload_json to a browser caller. The frontend uses this
+    # so its status pill can poll /healthz directly from hrfunc.org without a
+    # Flask proxy hop. allow_credentials stays False — /healthz is unauthenticated
+    # and we never want the browser to forward cookies/Access tokens cross-origin.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_methods=["GET", "HEAD"],
+        allow_headers=[],
+        allow_credentials=False,
+        max_age=600,
     )
 
     app.include_router(health.router)

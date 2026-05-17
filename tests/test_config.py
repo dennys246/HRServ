@@ -16,6 +16,7 @@ _OPTIONAL_SETTINGS_ENV = (
     "LOG_LEVEL",
     "DB_POOL_MIN_SIZE",
     "DB_POOL_MAX_SIZE",
+    "CORS_ORIGINS",
 )
 
 
@@ -35,6 +36,37 @@ def test_optional_defaults_applied(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.require_cf_access_headers is True
     assert s.db_pool_min_size == 1
     assert s.db_pool_max_size == 8
+    assert s.cors_origins == [
+        "https://hrfunc.org",
+        "https://www.hrfunc.org",
+        "http://localhost:5000",
+    ]
+
+
+def test_cors_origins_parsed_from_csv_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Env vars are strings; docker-compose CSV must split into a list, not be
+    rejected as 'not a JSON array' the way pydantic-settings would by default.
+    """
+    _scrub_optional_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x/y")
+    monkeypatch.setenv("NODE_ROLE", "primary")
+    monkeypatch.setenv("CORS_ORIGINS", "https://hrfunc.org, https://staging.hrfunc.org , ")
+    s = Settings()  # type: ignore[call-arg]
+    # Whitespace trimmed, empty trailing entries dropped.
+    assert s.cors_origins == ["https://hrfunc.org", "https://staging.hrfunc.org"]
+
+
+def test_cors_origins_empty_env_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`CORS_ORIGINS=` left in a .env template would otherwise silently disable
+    CORS for every origin and break the frontend status pill with no signal.
+    Fail loudly at startup instead.
+    """
+    _scrub_optional_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://x/y")
+    monkeypatch.setenv("NODE_ROLE", "primary")
+    monkeypatch.setenv("CORS_ORIGINS", "  ,  ")
+    with pytest.raises(ValidationError):
+        Settings()  # type: ignore[call-arg]
 
 
 def test_node_role_replica_parsed_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
