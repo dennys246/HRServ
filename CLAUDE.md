@@ -109,12 +109,14 @@ to get a throwaway Postgres on a non-default port, then export `DATABASE_URL` an
 When the user reports HRServ is broken in production, work the diagnosis in this order
 BEFORE suspecting recent PRs / code:
 
-1. **502 / 1033 from Cloudflare after a host reboot or network change → Docker bridge.**
-   `jib-jab` is mobile and occasionally relocated. After WiFi reconnect or a reboot,
-   the Docker bridge can land in a stale state where hrserv↔postgres TCP stops working
-   even though all containers are individually running. Symptom: `dc ps` shows `hrserv`
-   as unhealthy while `cloudflared` and `postgres` are healthy. **First fix: `dc down && dc up -d`.**
-   Named volumes persist so no data loss. Escalation: `sudo systemctl restart docker`.
+1. **502 / 1033 from Cloudflare after a host reboot or network change → Docker bridge OR
+   tailscale-IP-not-yet-assigned race.** `jib-jab` is mobile and occasionally relocated.
+   Symptom: `dc ps` shows `hrserv` as unhealthy while `cloudflared` and `postgres` are
+   healthy. **First fix: `dc down && dc up -d`.** Named volumes persist so no data loss.
+   Escalation: `sudo systemctl restart docker`. The permanent boot-time fix lives in
+   `deploy/docker.service.d/wait-for-tailscale.conf` (installed via PHASE_2A §9a.ii / NEW_NODE_SETUP §9.5) —
+   if that drop-in is in place and you still hit a 502 after reboot, confirm it actually fired
+   at boot via `journalctl -u docker -b 0 | grep 'tailscale wait'`.
    See `docs/OPERATIONS.md` §"Symptom: Cloudflare 502 (or 1033) after a host reboot / network change".
    **Try this before chasing recent merged PRs as the cause** — we wasted ~20 minutes on
    2026-05-15 doing the latter when it was the bridge.
@@ -122,11 +124,33 @@ BEFORE suspecting recent PRs / code:
    `dc logs cloudflared --tail 30` to confirm registered tunnel connections.
 3. **`Internal server error` from HRServ (not Cloudflare 502) → check `dc logs hrserv`.**
    Usually Postgres reachable but query failing, or asyncpg pool exhausted.
+4. **Can't even SSH to jib-jab?** See `docs/NETWORK_TROUBLESHOOTING.md` — covers the SSH-hangs /
+   packets-vanish / fail2ban-banned-me class of issues from the 2026-05-16 outage.
 
-`jib-jab` WiFi specifics (no NetworkManager — see `project_jib_jab_network.md` memory file):
-- Interface `wlp5s0` (Intel AX200), connected via raw `wpa_supplicant` + `dhclient`.
-- After a relocation, the user has to manually rebuild the connection — `nmcli`/`nmtui`
-  aren't installed.
+## jib-jab network conventions (post 2026-05-16 rebuild)
+
+jib-jab moved off raw `wpa_supplicant + dhclient` to **NetworkManager** as the sole network manager.
+Critical config that must stay true:
+
+- `NetworkManager.service` enabled, `wpa_supplicant.service` enabled (NM uses it via D-Bus —
+  do NOT mask), `networking.service` masked, `/etc/wpa_supplicant/ifupdown.sh` non-executable.
+- `tailscaled.service` enabled. HRServ's docker-compose binds Postgres to `${TAILSCALE_IP}:5432`,
+  so the tailnet IP MUST be on `tailscale0` before Docker brings the stack up. The drop-in at
+  `deploy/docker.service.d/wait-for-tailscale.conf` enforces this via `tailscale wait` +
+  `TimeoutStartSec=120` — don't remove either.
+- WiFi connection profile sets `802-11-wireless.cloned-mac-address=permanent` (hardware MAC,
+  NOT `stable` or `random` — randomization causes router state pollution).
+- `802-11-wireless.powersave=2` (disabled) to prevent iwlwifi association flapping.
+- `fail2ban` runs with `ignoreip = 127.0.0.1/8 ::1 192.168.0.0/16 10.0.0.0/8 100.64.0.0/10`
+  in `/etc/fail2ban/jail.d/ignore-trusted.conf` so we don't lock ourselves out.
+
+Remote access: `jib-jab.org` is a Cloudflare DNS-only A record pointing at jib-jab's **tailnet IP**
+(NOT the public IP). All SSH goes through Tailscale; no port forwarding. Public IP can rotate
+without breaking access. Full troubleshooting playbook in [docs/NETWORK_TROUBLESHOOTING.md](docs/NETWORK_TROUBLESHOOTING.md).
+
+When SSH to jib-jab fails: check fail2ban first (`fail2ban-client status sshd`), then router
+device list for stale entries, then NetworkManager/wpa_supplicant state. `tailscale ping` success
+does NOT prove SSH-over-Tailscale works — only proves the control plane is up.
 
 ## Things to NOT do (per bootstrap)
 

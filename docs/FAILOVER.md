@@ -98,6 +98,10 @@ infra notes. Then, once the old primary returns:
 4. Update `primary_conninfo` in `replica.conf` to point at the new primary's tailnet IP.
 5. Bring it up as the new replica (i.e. switch to `docker-compose.replica.yml`).
 6. Verify replication: insert a test row on the new primary, confirm it appears on the new replica.
+7. **Boot-chain install on the resurrected node.** Run `docs/NEW_NODE_SETUP.md` Step 9.5 on the
+   newly-demoted node so it survives reboots cleanly. The replica's compose file also binds
+   `${TAILSCALE_IP}:5432`, so the same wait-for-tailscale drop-in is required — without it,
+   any reboot will reproduce the 2026-05-16 outage on the demoted node.
 
 ## Step 6 — post-mortem
 
