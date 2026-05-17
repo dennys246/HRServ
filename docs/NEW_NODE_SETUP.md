@@ -236,6 +236,13 @@ REPLICA_TAILSCALE_IP=<this node's own IP — unused on replica but kept for symm
 TUNNEL_TOKEN=<new tunnel token from Step 8 below>
 ```
 
+If this node will serve `/healthz` to a frontend on a hostname other than
+`hrfunc.org` / `www.hrfunc.org` (e.g. a staging frontend), also set:
+```
+CORS_ORIGINS=https://hrfunc.org,https://www.hrfunc.org,https://staging.hrfunc.org
+```
+Otherwise the default allowlist covers production and you can leave it unset.
+
 Note on password symmetry: the Postgres role passwords (`POSTGRES_PASSWORD`,
 `HRSERV_DB_PASSWORD`, `REPLICATOR_PASSWORD`) effectively come from the
 primary via streaming replication — the replica's data dir is a copy of

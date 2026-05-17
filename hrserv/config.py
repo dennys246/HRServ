@@ -6,9 +6,10 @@ Settings are read once at startup and exposed via dependency injection.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class NodeRole(StrEnum):
@@ -63,6 +64,41 @@ class Settings(BaseSettings):
 
     db_pool_min_size: int = Field(default=1, ge=1)
     db_pool_max_size: int = Field(default=8, ge=1)
+
+    # NoDecode suppresses pydantic-settings' default JSON-decode pass on
+    # complex-typed env vars, so the field_validator below can handle a plain
+    # comma-separated string (the docker-compose-friendly format).
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default=[
+            "https://hrfunc.org",
+            "https://www.hrfunc.org",
+            "http://localhost:5000",
+        ],
+        description=(
+            "Origins permitted to make cross-origin GET/HEAD requests (intended for "
+            "the frontend's /healthz status pill). Comma-separated in env; defaults "
+            "cover hrfunc.org + www + the Flask dev port. CORS is scoped to GET/HEAD "
+            "only at the middleware layer, so widening this never exposes the ingest "
+            "POST surface to browsers."
+        ),
+    )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_csv_origins(cls, v: object) -> object:
+        if isinstance(v, str):
+            parts = [item.strip() for item in v.split(",") if item.strip()]
+            if not parts:
+                # An empty CORS_ORIGINS env (e.g. `CORS_ORIGINS=` left in a .env
+                # template) would otherwise silently disable CORS for everyone
+                # and break the frontend status pill with no obvious signal.
+                # Fail loudly at startup instead.
+                raise ValueError(
+                    "CORS_ORIGINS is set but empty. Unset to use the default "
+                    "allowlist, or provide at least one origin."
+                )
+            return parts
+        return v
 
 
 def load_settings() -> Settings:
