@@ -1,0 +1,30 @@
+# macOS/Colima port-binding override. Always use ALONGSIDE a role file:
+#
+#   docker compose -f docker/docker-compose.replica.yml \
+#                  -f docker/docker-compose.macos.yml up -d
+#
+# Why this exists: under Colima, dockerd runs inside a Lima VM. The host's
+# tailnet IP (${TAILSCALE_IP}) is on the macOS host's tailscale interface,
+# NOT on any interface inside the VM — so the role files' publish spec
+# `${TAILSCALE_IP}:5432:5432` fails inside the VM with "cannot assign
+# requested address" (the same class of failure the Linux boot race
+# produced, but deterministic: it would fail on every boot).
+#
+# Instead we bind loopback, which Colima forwards to the macOS host's
+# 127.0.0.1. Postgres is then reachable only from the Mac itself. When this
+# node must serve Postgres to a tailnet peer (i.e. once it is a PRIMARY that
+# a replica dials into), expose it tailnet-only via:
+#
+#   tailscale serve --bg --tcp 5432 tcp://127.0.0.1:5432
+#
+# — see deploy/launchd/README.md §"Postgres over the tailnet on macOS" for
+# the pg_hba.conf implications before doing this. As a replica (outbound
+# replication only) no tailnet exposure of 5432 is needed at all.
+#
+# `!override` (compose >= 2.24) REPLACES the ports list instead of merging;
+# without it compose would try to bind both specs and reintroduce the
+# failure this file removes.
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:5432:5432"

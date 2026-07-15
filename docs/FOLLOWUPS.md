@@ -434,24 +434,29 @@ for ~2 min) but won't tell us why.
 
 ## Mac Mini (hrserv-2) launchd boot orchestration
 
-**Where:** The Mac Mini arriving August 2026 (Phase 2c+).
+**Where:** The Mac Mini (`big-mac-mini`, arrived July 2026, Phase 2c+).
 
-**Why deferred:** The current boot chain is Debian/Linux-specific —
+**Status 2026-07-15:** Draft landed in `deploy/launchd/` (README, two
+LaunchDaemon plists, boot scripts, installer) plus
+`docker/docker-compose.macos.yml` and `docs/NEW_NODE_SETUP.md` Step 9.5-mac.
+Design differs from the original sketch: Colima instead of Docker Desktop
+(no GUI login session needed), a poll-for-specific-tailnet-IP loop inside
+the colima daemon's wrapper script instead of a separate
+wait-for-tailscale plist (launchd has no unit ordering, so a second plist
+couldn't gate the first anyway), and a loopback Postgres bind because the
+tailnet IP doesn't exist inside Colima's VM.
+
+**Why deferred (original):** The current boot chain is Debian/Linux-specific —
 `hrserv.service` (systemd unit), `wait-for-tailscale.conf` (systemd
 drop-in), and `chmod -x /etc/wpa_supplicant/ifupdown.sh` (Debian
 ifupdown). macOS uses launchd and doesn't have any of those.
 
-**What needs to be written:**
-- `deploy/launchd/com.hrfunc.hrserv.plist` — equivalent of `hrserv.service`.
-  Runs `docker compose down && docker compose up -d` after Tailscale is ready.
-- `deploy/launchd/com.hrfunc.docker-wait-for-tailscale.plist` — equivalent
-  of the wait-for-tailscale drop-in. Probably an `OnDemand=false`
-  LaunchDaemon that blocks until `/Applications/Tailscale.app/Contents/MacOS/Tailscale wait`
-  returns, then signals Docker to start.
-
-**Resolve when:** Mac Mini is racked. Cross-reference
-`docs/NEW_NODE_SETUP.md` Step 9.5 — the macOS version of that step should
-be drafted before the Mac Mini first reboots in production.
+**Resolve when:** the reboot drill in `deploy/launchd/README.md` §Verify
+passes twice consecutively on the Mac Mini. Until then the draft is
+UNVALIDATED on real hardware. Also revisit at promotion time: the
+`tailscale serve` + pg_hba trade-off documented in
+`deploy/launchd/README.md` §"Postgres over the tailnet on macOS" is a
+deliberate decision deferred to when this node must serve replication.
 
 ## cloudflared boot race audit
 

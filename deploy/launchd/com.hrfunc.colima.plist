@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.hrfunc.colima — macOS equivalent of the docker.service +
+  wait-for-tailscale.conf pair on Linux (see deploy/docker.service.d/).
+
+  Waits for the tailnet IP to be assigned, then runs the Colima VM (which
+  hosts dockerd) in the foreground so launchd owns its lifecycle. KeepAlive
+  with SuccessfulExit=false means launchd restarts the VM if it dies, but a
+  clean operator `colima stop` stays stopped.
+
+  This is a LaunchDaemon (not a LaunchAgent): it starts at boot BEFORE any
+  user logs in, which is the whole point — no auto-login required. It runs
+  as the operator user via the UserName key because Colima's VM state lives
+  in ~/.colima.
+
+  Install via deploy/launchd/install.sh, which substitutes
+  REPLACE_WITH_OPERATOR_USER and copies this file to /Library/LaunchDaemons.
+  Do not hand-edit the copy in /Library/LaunchDaemons; edit the repo version
+  and re-run the installer.
+
+  Full runbook: deploy/launchd/README.md
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hrfunc.colima</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/hrserv/deploy/launchd/bin/colima-up.sh</string>
+    </array>
+
+    <key>UserName</key>
+    <string>REPLACE_WITH_OPERATOR_USER</string>
+
+    <!-- launchd does not populate HOME for daemons even with UserName set;
+         Colima and the docker CLI both need it (~/.colima, ~/.docker). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/REPLACE_WITH_OPERATOR_USER</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Restart backoff: if colima-up.sh keeps failing (e.g. tailnet never
+         comes up), retry every 30s rather than hot-looping. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/opt/hrserv/logs/launchd-colima.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/hrserv/logs/launchd-colima.log</string>
+</dict>
+</plist>
