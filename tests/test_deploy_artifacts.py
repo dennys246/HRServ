@@ -149,6 +149,14 @@ def test_install_sed_patterns_match_plist_placeholders() -> None:
     assert "s/REPLACE_WITH_OPERATOR_USER/" in text, "username sed pattern drifted"
 
 
+def test_install_verifies_repo_mounted_in_colima_vm() -> None:
+    """Bind mounts resolve inside Colima's VM; a missing source silently
+    becomes an empty directory and Postgres crash-loops. install.sh must
+    probe visibility through the VM, not just on the Mac."""
+    text = (LAUNCHD_DIR / "install.sh").read_text()
+    assert "colima ssh" in text, "installer no longer probes the VM for the repo mount"
+
+
 def test_hrserv_script_uses_role_file_plus_macos_override() -> None:
     text = (LAUNCHD_DIR / "bin" / "hrserv-up.sh").read_text()
     # Same clean-boot semantics as deploy/hrserv.service: down before up,
@@ -160,6 +168,28 @@ def test_hrserv_script_uses_role_file_plus_macos_override() -> None:
     # port bind work under Colima at all.
     assert "docker-compose.macos.yml" in text
     assert "COMPOSE_ROLE_FILE:-docker-compose.replica.yml" in text
+
+
+def test_both_role_files_feed_initdb_all_role_passwords() -> None:
+    """01-create-roles.sh hard-requires HRSERV_DB_PASSWORD and
+    REPLICATOR_PASSWORD. A role compose file that omits one from the
+    postgres environment aborts first boot mid-init on a fresh volume,
+    and the restart policy then boots a half-initialized cluster (healthy
+    postgres, no app role/schema)."""
+    for role_file in ("docker-compose.primary.yml", "docker-compose.replica.yml"):
+        text = (REPO_ROOT / "docker" / role_file).read_text()
+        postgres_env = text.split("environment:")[1]
+        for var in ("HRSERV_DB_PASSWORD", "REPLICATOR_PASSWORD"):
+            assert f"{var}: ${{{var}" in postgres_env, f"{role_file} postgres env lacks {var}"
+        # The whole init pipeline, not just its env: without POSTGRES_DB and
+        # these mounts the entrypoint logs "ignoring
+        # /docker-entrypoint-initdb.d/*" and boots a roleless, schemaless
+        # cluster.
+        assert "POSTGRES_DB: hrserv" in postgres_env, f"{role_file} lacks POSTGRES_DB"
+        assert "./postgres/initdb:/docker-entrypoint-initdb.d:ro" in text, (
+            f"{role_file} lacks the initdb mount"
+        )
+        assert "../migrations:/migrations:ro" in text, f"{role_file} lacks the migrations mount"
 
 
 def test_macos_override_replaces_tailnet_port_bind() -> None:

@@ -25,6 +25,25 @@ because Colima's VM state and the docker socket live in the operator's home.
 
 ## Key macOS differences you can't skip
 
+0. **Colima must mount `/opt/hrserv` into its VM.** Bind-mount sources
+   resolve inside the VM, and Colima only shares `$HOME` and `/tmp/colima`
+   by default. For any path outside those, Docker silently fabricates an
+   empty directory — Postgres then crash-loops with
+   `input in flex scanner failed at file "/etc/postgresql/postgresql.conf"`
+   (it's reading a directory). In `~/.colima/default/colima.yaml`, listing
+   `mounts:` REPLACES the defaults, so include both:
+   ```yaml
+   mounts:
+     - location: "~"     # QUOTED — a bare ~ is YAML's null literal, and a
+                         # null location fails colima start with
+                         # "overlapping mounts not supported: '' overlaps ..."
+       writable: true
+     - location: /opt/hrserv
+       writable: true
+   ```
+   then `colima stop && colima start` (restarts every container in the VM,
+   co-tenant projects included). `install.sh` verifies this when the VM is
+   running: `colima ssh -- test -f /opt/hrserv/docker/docker-compose.replica.yml`.
 1. **Postgres can't bind the tailnet IP under Colima.** dockerd runs inside a
    Lima VM where `${TAILSCALE_IP}` doesn't exist on any interface, so the role
    compose files' `${TAILSCALE_IP}:5432:5432` fails with "cannot assign

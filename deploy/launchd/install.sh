@@ -43,6 +43,27 @@ if [[ ! -f "$HRSERV_DIR/docker/.env" ]]; then
     echo "ERROR: $HRSERV_DIR/docker/.env missing — do NEW_NODE_SETUP Step 7 first." >&2
     fail=1
 fi
+# The repo must be mounted INSIDE the Colima VM: bind-mount sources resolve
+# in the VM, and Docker silently fabricates missing sources as empty
+# directories — Postgres then crash-loops on "input in flex scanner failed"
+# reading a directory where its config should be. Colima only shares $HOME
+# and /tmp/colima by default; /opt/hrserv needs an explicit colima.yaml
+# mounts entry (see deploy/launchd/README.md §"Key macOS differences").
+# Caught live on big-mac-mini 2026-07-15. Only checkable while the VM runs.
+if sudo -u "$OPERATOR" -H /opt/homebrew/bin/colima status >/dev/null 2>&1; then
+    if ! sudo -u "$OPERATOR" -H /opt/homebrew/bin/colima ssh -- \
+            test -f "$HRSERV_DIR/docker/docker-compose.replica.yml" 2>/dev/null; then
+        echo "ERROR: $HRSERV_DIR is not visible inside the Colima VM — its bind mounts" >&2
+        echo "would become empty directories. Add both \"~\" (QUOTED — bare ~ is YAML" >&2
+        echo "null) and /opt/hrserv to the mounts: list in ~/.colima/default/colima.yaml" >&2
+        echo "(listing mounts REPLACES the defaults), then colima stop && colima start." >&2
+        fail=1
+    fi
+else
+    echo "NOTE: Colima VM not running — could not verify $HRSERV_DIR is mounted inside" >&2
+    echo "the VM. Ensure colima.yaml's mounts: include it, or Postgres will crash-loop." >&2
+fi
+
 # The hrserv image build needs BuildKit (Dockerfile uses RUN --mount), and
 # unlike Linux Docker, Homebrew's docker CLI doesn't bundle buildx. Caught
 # live on big-mac-mini's first drill boot 2026-07-15.

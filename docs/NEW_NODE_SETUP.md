@@ -90,7 +90,10 @@ macOS (Colima):
 brew install colima docker docker-compose docker-buildx
 # Wire the CLI plugins per `brew info docker-compose` (cliPluginsExtraDirs
 # in ~/.docker/config.json — covers buildx too), then:
-colima start --cpu 2 --memory 4 --disk 20
+# The --mount flags are REQUIRED (and replace Colima's defaults, hence ~
+# too): without /opt/hrserv mounted in the VM, the postgres config
+# bind-mounts silently become empty directories and postgres crash-loops.
+colima start --cpu 2 --memory 4 --disk 20 --mount ~:w --mount /opt/hrserv:w
 docker compose version
 docker buildx version   # REQUIRED: the hrserv image build uses BuildKit
                         # (RUN --mount); Homebrew's docker doesn't bundle

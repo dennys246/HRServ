@@ -34,10 +34,24 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       PRIMARY_TAILSCALE_IP: ${PRIMARY_TAILSCALE_IP:?set PRIMARY_TAILSCALE_IP}
       REPLICATOR_PASSWORD: ${REPLICATOR_PASSWORD:?set REPLICATOR_PASSWORD}
+      # POSTGRES_DB + HRSERV_DB_PASSWORD + the initdb/migrations mounts
+      # below are consumed ONLY when initdb runs — i.e. scratch/drill
+      # stacks on a fresh volume. Normal replicas are seeded by
+      # pg_basebackup and skip initdb entirely (see NEW_NODE_SETUP Step 7's
+      # password-symmetry note), so on a real replica all of this is inert.
+      # Without it, a fresh-volume boot produces a half-initialized
+      # cluster: postgres healthy, but no hrserv database, no app role, no
+      # schema — the app fails auth forever while the entrypoint logs
+      # "ignoring /docker-entrypoint-initdb.d/*". Observed live on
+      # big-mac-mini 2026-07-15; wiring mirrors docker-compose.primary.yml.
+      POSTGRES_DB: hrserv
+      HRSERV_DB_PASSWORD: ${HRSERV_DB_PASSWORD:?set HRSERV_DB_PASSWORD}
     volumes:
       - pg_data_replica:/var/lib/postgresql/data
       - ./postgres/replica.conf:/etc/postgresql/postgresql.conf:ro
       - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - ../migrations:/migrations:ro
     command:
       - postgres
       - -c
