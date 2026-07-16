@@ -1,12 +1,62 @@
 # Adding a new HRServ node
 
-How to bring up an additional HRServ node — either as a **test replica**
-(Phase 2c, low-stakes validation of streaming replication) or as a
-**production replica** (Phase 2c→2d, real DR). The procedure is similar
-but the stakes and verification steps differ.
+How to bring up an additional HRServ node — as a **test replica**, a
+**production replica** (real DR), or a **fresh primary** (see "Path B"
+below). Steps are written for both supported OSes; where they differ, each
+step carries a Linux and a macOS variant.
 
-For the FIRST node (the box currently serving as `hrserv-1`), see
-`docs/PHASE_2A_HRSERV1_SETUP.md` instead.
+**Current topology (2026-07-15):** primary = `big-mac-mini` (macOS,
+Colima); `jib-jab` (Linux) is being re-seeded as the replica. Node names
+are machine names, never roles — only `api.hrfunc.org` encodes "who is
+production".
+
+## OS quickstart — where the paths diverge
+
+Both OSes follow the same step numbers; this table is the map of every
+divergence, each learned the hard way on big-mac-mini (2026-07-15):
+
+| Concern | Linux (Debian reference) | macOS (Apple Silicon reference) |
+|---|---|---|
+| Container runtime | `curl get.docker.com \| sh` (includes buildx) | `brew install colima docker docker-compose docker-buildx` + wire CLI plugins; **buildx is separate and required** |
+| Runtime start | dockerd via systemd | `colima start --mount ~:w --mount /opt/hrserv:w ...` — **the repo MUST be mounted into the VM** or bind mounts silently become empty dirs |
+| Tailscale | apt package (systemd unit) | Homebrew tailscaled as root LaunchDaemon — **never the GUI app** (needs login) |
+| Postgres host bind | `${TAILSCALE_IP}:5432` (role compose files) | `127.0.0.1:15432` via `docker/docker-compose.macos.yml` — **always pass it as a second `-f`**; tailnet IPs don't exist inside the Colima VM |
+| Boot orchestration (Step 9.5) | systemd units in `deploy/` | launchd chain in `deploy/launchd/` (`sudo deploy/launchd/install.sh`) |
+| Host prereqs | — | **FileVault OFF**, `pmset -a sleep 0 autorestart 1`, auto-update reboots off |
+| Serving replication to a peer | pg_hba `<peer-ip>/32` rule (Step 4) | `tailscale serve --tcp 5432 tcp://127.0.0.1:15432` + a pg_hba source-address decision — see `docs/FAILOVER.md` §"macOS/Colima notes" |
+| Port pre-flight | `ss -tlnp` | `lsof -iTCP -sTCP:LISTEN` + `docker ps` (co-tenant containers can squat ports) |
+
+Universal rules, any OS: repo lives at `/opt/hrserv`, owned by the operator
+(never `sudo git`); `.env` values unquoted; substitute the pg_hba
+placeholder before first boot (Step 9); the deliberate-reboot drill (twice,
+hands-free) is the real acceptance test.
+
+## Path B — standing up a fresh PRIMARY
+
+When there is no existing cluster to replicate from — first node ever, DR
+after total loss (accepting the data loss), or an empty-dataset cutover
+like 2026-07-15 — the flow is shorter:
+
+1. Steps 0–3 (pre-flight, runtime, Tailscale, clone) and Step 7 (`.env`),
+   but the compose file everywhere is `docker-compose.primary.yml`
+   (macOS: plus the override; set `COMPOSE_ROLE_FILE` in
+   `deploy/launchd/bin/hrserv-up.sh` accordingly).
+2. Step 8 (tunnel) — and this node DOES get the `api.hrfunc.org` public
+   hostname (all paths → `http://hrserv:8000`) plus its per-node
+   `<node>.hrfunc.org` healthz hostname. DNS CNAMEs target the tunnel's
+   **UUID** (`<uuid>.cfargotunnel.com`) — a wrong UUID is Cloudflare error
+   1016.
+3. Step 9 + 9.5 (bring-up + boot chain + reboot drills).
+4. Mint the frontend's key: `dc exec hrserv hrserv-mint-key --label
+   render-frontend`, then set `HRFUNC_API_KEY` on Render (hrfunc-web).
+5. Smoke-test a real upload through hrfunc.org; unpause/point the
+   UptimeRobot production monitor; per-node monitor per
+   `docs/MONITORING.md`.
+
+Everything below this line is the replica path (Path A).
+
+For the long-form history of the first Linux node, see
+`docs/PHASE_2A_HRSERV1_SETUP.md`.
 
 ## Decide upfront: test or production?
 

@@ -15,11 +15,15 @@
 > Until Phase 2c lands, also see `docs/BACKUP_RESTORE.md` — backups are
 > similarly aspirational.
 >
-> **Update 2026-07-15:** the Mac Mini (`big-mac-mini`) is being stood up as
-> the replica under Colima + launchd (`docs/NEW_NODE_SETUP.md` incl. Step
-> 9.5-mac, `deploy/launchd/`). Once it's streaming, this runbook becomes
-> executable — after the known issues below are fixed, and with the
-> macOS/Colima notes section observed.
+> **Update 2026-07-15 (supersedes the above):** `big-mac-mini` (macOS,
+> Colima) is now the **PRIMARY**, via a fresh-primary standup while jib-jab
+> was down — the empty-dataset trade-off was accepted deliberately (see
+> "Path B" in `docs/NEW_NODE_SETUP.md`). No promotion was involved, so the
+> known issues below remain unexercised and unfixed. `jib-jab` (Linux) is
+> pending revival and re-seed as the replica; once it streams, this runbook
+> becomes executable — after the KNOWN ISSUES are fixed, and noting that
+> the "macOS/Colima notes" section now applies to the PRIMARY side
+> (serving replication FROM a Mac is the item-3 pg_hba decision).
 
 > **🐛 KNOWN ISSUES (verified 2026-07-15, unfixed — promotion will NOT work
 > as written):** `scripts/promote_replica.sh` has two bugs, platform-independent:
