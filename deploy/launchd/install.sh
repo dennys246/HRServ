@@ -54,9 +54,9 @@ if sudo -u "$OPERATOR" -H /opt/homebrew/bin/colima status >/dev/null 2>&1; then
     if ! sudo -u "$OPERATOR" -H /opt/homebrew/bin/colima ssh -- \
             test -f "$HRSERV_DIR/docker/docker-compose.replica.yml" 2>/dev/null; then
         echo "ERROR: $HRSERV_DIR is not visible inside the Colima VM — its bind mounts" >&2
-        echo "would become empty directories. Add both '~' and '/opt/hrserv' to the" >&2
-        echo "mounts: list in ~/.colima/default/colima.yaml (listing mounts REPLACES" >&2
-        echo "the defaults), then colima stop && colima start." >&2
+        echo "would become empty directories. Add both \"~\" (QUOTED — bare ~ is YAML" >&2
+        echo "null) and /opt/hrserv to the mounts: list in ~/.colima/default/colima.yaml" >&2
+        echo "(listing mounts REPLACES the defaults), then colima stop && colima start." >&2
         fail=1
     fi
 else

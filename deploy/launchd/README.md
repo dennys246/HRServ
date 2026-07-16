@@ -34,7 +34,9 @@ because Colima's VM state and the docker socket live in the operator's home.
    `mounts:` REPLACES the defaults, so include both:
    ```yaml
    mounts:
-     - location: ~
+     - location: "~"     # QUOTED — a bare ~ is YAML's null literal, and a
+                         # null location fails colima start with
+                         # "overlapping mounts not supported: '' overlaps ..."
        writable: true
      - location: /opt/hrserv
        writable: true
