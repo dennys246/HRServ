@@ -2,7 +2,9 @@
 
 What to monitor, recommended tools, alerting thresholds. As of 2026-05
 none of this is wired up — this doc is the to-do list for the first
-post-shadow operational hardening pass.
+post-shadow operational hardening pass. (2026-07-15: UptimeRobot +
+Pushover wiring in progress alongside the hrserv-2 bring-up; see the
+per-node monitors section.)
 
 ## The single most important thing to do today
 
@@ -34,6 +36,44 @@ Setup (UptimeRobot example):
 
 Result: 5+ minutes of downtime → email/SMS. Resolves itself when health
 returns.
+
+## Per-node monitors (hrserv-2 onward) — added 2026-07-15
+
+The production monitor above watches `api.hrfunc.org`, i.e. **whichever
+node currently holds production** — it follows the hostname through a
+failover with no edits. To also watch a specific standby node (the Mac
+Mini), give that node's tunnel a monitoring-only hostname:
+
+1. Zero Trust dashboard → Networks → Tunnels → **`hrserv-2`** (⚠️ the
+   replica's tunnel — NOT jib-jab's; adding hostnames to the production
+   tunnel is a failover action, per `docs/FAILOVER.md`) → Public Hostname
+   → Add: subdomain `hrserv-2`, domain `hrfunc.org`, **path `healthz`**,
+   service `HTTP` → `hrserv:8000`. The path restriction 404s everything
+   else at the edge; `api.hrfunc.org` routing is untouched.
+2. Verify: `curl -sS https://hrserv-2.hrfunc.org/healthz` →
+   `{"status":"ok","db":true,"node_role":"replica"}`.
+3. UptimeRobot: Keyword monitor, keyword `"status":"ok"` (alert when
+   missing), 5-min interval, 2 consecutive failures before alerting.
+
+Keep the two nodes' alerts distinguishable — a replica blip must not read
+like production down at 3am:
+
+| Monitor name | URL | Alert contacts | Severity |
+|---|---|---|---|
+| HRServ PROD (api.hrfunc.org) | `https://api.hrfunc.org/healthz` | Pushover + email | SEV1 — wake up Denny |
+| HRServ replica (big-mac-mini) | `https://hrserv-2.hrfunc.org/healthz` | email only | SEV2 — business hours |
+| Frontend | `https://hrfunc.org/` | Pushover + email | SEV1 |
+
+Pushover hookup: use UptimeRobot's native Pushover alert contact if the
+plan offers it; otherwise Pushover's email gateway (a `@pomail.net`
+alias created in Pushover's settings) as an email contact works on any
+tier.
+
+After a failover/role swap: the PROD monitor needs nothing. Add a
+`hrserv-1.hrfunc.org` healthz hostname + replica monitor for the demoted
+node, same pattern as above. Expect reboot drills on a node to trip its
+per-node monitor briefly — that's the alert chain working, not an
+incident.
 
 ## Beyond uptime — what else to track
 
