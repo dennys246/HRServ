@@ -12,10 +12,14 @@ The MVP is a **receiver only** — no read/query/distribution endpoints yet. The
 schema and the streaming-replica setup are ready for those to land once the
 GitHub-hosted HRF database needs to come online.
 
-**Current status (2026-05):** `hrserv-1` (on jib-jab.org) is live. Phase 2b
-shadow-write is active — every upload through hrfunc.org dual-writes to the
-legacy backend (authoritative) and HRServ (validation shadow). The test
-replica and August Mac Mini cutover land in Phase 2c.
+**Current status (2026-07-15):** HRServ is authoritative (cutover from the
+legacy backend happened 2026-05-14). Production runs on **big-mac-mini**
+(Mac Mini, macOS + Colima) behind `api.hrfunc.org` — a fresh-primary standup
+performed while jib-jab was down, with the empty-dataset trade-off accepted
+deliberately. jib-jab (Linux) is pending revival and re-seed as the
+streaming replica, which will restore two-node redundancy. External
+monitoring (UptimeRobot → Pushover) watches `/healthz` per-node and in
+production.
 
 ## Quick reference
 
@@ -24,17 +28,19 @@ replica and August Mac Mini cutover land in Phase 2c.
 | Public endpoint | `POST https://api.hrfunc.org/upload_json` |
 | Health | `GET https://api.hrfunc.org/healthz` |
 | Auth | Cloudflare Access service token + app `x-api-key` (argon2-hashed) |
-| Topology | `hrserv-1` only (Phase 2c will add a replica) |
+| Topology | primary = `big-mac-mini` (macOS/Colima); `jib-jab` (Linux) re-seeding as replica |
 | Original plan | [BOOTSTRAP.md](BOOTSTRAP.md) |
 | System overview | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Day-to-day ops | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
-| First-node setup | [docs/PHASE_2A_HRSERV1_SETUP.md](docs/PHASE_2A_HRSERV1_SETUP.md) |
-| Adding more nodes | [docs/NEW_NODE_SETUP.md](docs/NEW_NODE_SETUP.md) |
+| **Node setup (any OS)** | [docs/NEW_NODE_SETUP.md](docs/NEW_NODE_SETUP.md) — start here for new machines |
+| macOS boot chain | [deploy/launchd/README.md](deploy/launchd/README.md) |
+| First-node history (Linux) | [docs/PHASE_2A_HRSERV1_SETUP.md](docs/PHASE_2A_HRSERV1_SETUP.md) |
 | Key rotation | [docs/KEY_ROTATION.md](docs/KEY_ROTATION.md) |
-| Shadow validation | [docs/SHADOW_WINDOW.md](docs/SHADOW_WINDOW.md) |
-| Monitoring (not yet wired) | [docs/MONITORING.md](docs/MONITORING.md) |
-| Failover (no replica yet) | [docs/FAILOVER.md](docs/FAILOVER.md) |
+| Monitoring (wired 2026-07) | [docs/MONITORING.md](docs/MONITORING.md) |
+| Failover | [docs/FAILOVER.md](docs/FAILOVER.md) — read its KNOWN ISSUES banner first |
+| Network debugging | [docs/NETWORK_TROUBLESHOOTING.md](docs/NETWORK_TROUBLESHOOTING.md) |
 | Backup/restore (not yet wired) | [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) |
+| Shadow validation (historical) | [docs/SHADOW_WINDOW.md](docs/SHADOW_WINDOW.md) |
 | Deferred items | [docs/FOLLOWUPS.md](docs/FOLLOWUPS.md) |
 | Development standards | [CLAUDE.md](CLAUDE.md) |
 

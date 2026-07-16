@@ -443,7 +443,15 @@ for ~2 min) but won't tell us why.
 
 **Where:** The Mac Mini (`big-mac-mini`, arrived July 2026, Phase 2c+).
 
-**Status 2026-07-15:** Draft landed in `deploy/launchd/` (README, two
+**Status 2026-07-15 (evening):** Live in production — big-mac-mini runs the
+boot chain as the PRIMARY after the same-day cutover. Reboot drills passed
+in replica role and (post self-heal fix) in primary role; nine distinct
+bring-up failures were caught and fixed at the root (buildx, port
+co-tenancy, VM mounts, YAML-null tilde, pg_hba placeholder, initdb env +
+wiring, stale Lima state, LIMA_HOME). Wanted before closing: one more
+consecutive hands-free pass on the final (primary) configuration.
+
+Original draft scope: `deploy/launchd/` (README, two
 LaunchDaemon plists, boot scripts, installer) plus
 `docker/docker-compose.macos.yml` and `docs/NEW_NODE_SETUP.md` Step 9.5-mac.
 Design differs from the original sketch: Colima instead of Docker Desktop
@@ -500,6 +508,10 @@ to each doc with a one-line description. Cross-link from CLAUDE.md too.
 
 **Resolve when:** Any tidy-up PR. Low-priority since current operators
 (just Denny) know where things are.
+
+**Resolved 2026-07-15:** README's Quick reference table refreshed to cover
+every doc (added the launchd README and NETWORK_TROUBLESHOOTING, removed
+stale status annotations) as part of the multi-OS setup docs pass.
 
 ## Tailscale key expiry calendar reminder
 
