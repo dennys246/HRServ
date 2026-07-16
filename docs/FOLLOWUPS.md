@@ -48,7 +48,14 @@ file as documentation-only and rename it `cloudflared.example.yml`.
 
 ## Compose-file role coupling on failover
 
-**Where:** `scripts/promote_replica.sh`, `docker/docker-compose.replica.yml`
+**Where:** `scripts/promote_replica.sh`, `docker/docker-compose.replica.yml`,
+`deploy/hrserv.service` (hardcodes the primary file), and — as of 2026-07-15 —
+`deploy/launchd/bin/hrserv-up.sh` (`COMPOSE_ROLE_FILE`, defaults to replica).
+A node's role is now encoded in four places; the eventual fix should
+converge them on one source of truth (e.g. a `docker/.role` file or `.env`
+var read by both boot chains and the promote script). Note the macOS flip
+mechanism is "edit a git-tracked script in the working tree" — a later
+`git pull`/checkout can silently revert it and demote the node on next boot.
 
 **Symptom:** After `promote_replica.sh --confirm`, the newly-promoted node is
 running services from `docker-compose.replica.yml` with `NODE_ROLE=primary`.
@@ -434,24 +441,30 @@ for ~2 min) but won't tell us why.
 
 ## Mac Mini (hrserv-2) launchd boot orchestration
 
-**Where:** The Mac Mini arriving August 2026 (Phase 2c+).
+**Where:** The Mac Mini (`big-mac-mini`, arrived July 2026, Phase 2c+).
 
-**Why deferred:** The current boot chain is Debian/Linux-specific —
+**Status 2026-07-15:** Draft landed in `deploy/launchd/` (README, two
+LaunchDaemon plists, boot scripts, installer) plus
+`docker/docker-compose.macos.yml` and `docs/NEW_NODE_SETUP.md` Step 9.5-mac.
+Design differs from the original sketch: Colima instead of Docker Desktop
+(no GUI login session needed), a poll-for-specific-tailnet-IP loop inside
+the colima daemon's wrapper script instead of a separate
+wait-for-tailscale plist (launchd has no unit ordering, so a second plist
+couldn't gate the first anyway), and a loopback Postgres bind because the
+tailnet IP doesn't exist inside Colima's VM.
+
+**Why deferred (original):** The current boot chain is Debian/Linux-specific —
 `hrserv.service` (systemd unit), `wait-for-tailscale.conf` (systemd
 drop-in), and `chmod -x /etc/wpa_supplicant/ifupdown.sh` (Debian
 ifupdown). macOS uses launchd and doesn't have any of those.
 
-**What needs to be written:**
-- `deploy/launchd/com.hrfunc.hrserv.plist` — equivalent of `hrserv.service`.
-  Runs `docker compose down && docker compose up -d` after Tailscale is ready.
-- `deploy/launchd/com.hrfunc.docker-wait-for-tailscale.plist` — equivalent
-  of the wait-for-tailscale drop-in. Probably an `OnDemand=false`
-  LaunchDaemon that blocks until `/Applications/Tailscale.app/Contents/MacOS/Tailscale wait`
-  returns, then signals Docker to start.
-
-**Resolve when:** Mac Mini is racked. Cross-reference
-`docs/NEW_NODE_SETUP.md` Step 9.5 — the macOS version of that step should
-be drafted before the Mac Mini first reboots in production.
+**Resolve when:** the reboot drill in `deploy/launchd/README.md` §Verify
+passes twice consecutively on the Mac Mini. Until then the draft is
+UNVALIDATED on real hardware. Two more things are explicitly deferred to
+promotion time (both listed in `docs/FAILOVER.md` §"macOS/Colima notes"):
+the `tailscale serve` + pg_hba trade-off documented in
+`deploy/launchd/README.md` §"Postgres over the tailnet on macOS", and the
+backup.sh macOS port (separate entry below).
 
 ## cloudflared boot race audit
 
@@ -505,3 +518,58 @@ too.
 **Resolve when:** Calendar reminder for 2026-10-15 to either:
 1. Disable key expiry in Tailscale admin (preferred for servers), or
 2. Manually re-auth jib-jab via `sudo tailscale up`.
+
+---
+
+# Added 2026-07-15 — surfaced by the macOS boot-chain parallel review
+
+## promote_replica.sh cannot actually promote
+
+**Where:** `scripts/promote_replica.sh:82` and `:88`, plus the literal
+`NODE_ROLE:` values in both role compose files.
+
+**Symptom:** Two independent breaks, both platform-agnostic and verified
+against the code: (a) `docker compose exec -T postgres pg_ctl promote`
+executes as root inside the postgres image (no `USER` directive; the
+entrypoint drops privileges only for the server process), and `pg_ctl`
+refuses to run as root — `set -euo pipefail` aborts the script before
+promotion. (b) `NODE_ROLE=primary docker compose ... up -d --no-deps hrserv`
+is a no-op: `docker-compose.replica.yml` hardcodes `NODE_ROLE: replica` as a
+literal, shell env only affects `${...}` interpolation, so compose sees an
+unchanged config and doesn't recreate the container. Net effect of running
+the runbook: Postgres never promotes; even if (a) is fixed by hand, hrserv
+keeps returning 503 on `/upload_json` while `/healthz` stays green — an
+invisible write outage exactly when a failover is in progress.
+
+**Why deferred:** Found 2026-07-15 during the macOS boot-chain review;
+fixing it properly is its own branch (compose files move to
+`NODE_ROLE: ${NODE_ROLE:-replica}`-style interpolation or the script swaps
+role files; `exec -u postgres`; plus tests — the promotion contract
+currently has none, violating the tests-for-promised-behavior rule).
+`docs/FAILOVER.md` carries a KNOWN ISSUES banner pointing here so nobody
+trusts the runbook in the meantime.
+
+**Resolve when:** BEFORE the Mac Mini is promoted to primary (planned Phase
+D of the July 2026 migration). Hard blocker for any real failover.
+
+## backup.sh is Linux-only
+
+**Where:** `scripts/backup.sh` (`shred -u`; `/var/backups/hrserv` and
+`/var/log` paths; cron scheduling assumption).
+
+**Symptom:** If run on a macOS primary as-is: `shred` doesn't exist on
+macOS, so `set -euo pipefail` aborts mid-script — after the plaintext dump
+is written but before the rsync (peer) and restic (B2) legs. From cron
+that's zero off-site copies, silently, plus an un-shredded plaintext dump
+left on disk every night.
+
+**Why deferred:** The Mini is a replica for now; backups continue to run on
+hrserv-1 (Linux), where the script works. Receiving cross-shipped dumps on
+the Mini needs no porting (Remote Login + a writable `PEER_DIR` — see
+NEW_NODE_SETUP Step 12).
+
+**Resolve when:** before the Mini becomes primary (same trigger as the
+promote_replica.sh entry). Port sketch: replace `shred -u` with `rm -P` (or
+brew `gshred`), move paths to operator-writable locations, schedule via
+launchd `StartCalendarInterval` instead of cron, then re-run the
+`BACKUP_RESTORE.md` restore drill from the Mac.

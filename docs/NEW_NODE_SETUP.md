@@ -27,10 +27,12 @@ Before starting, on the new box:
 
 - **Linux** (x86_64 or arm64) — full procedure including boot-chain orchestration
   (Step 9.5) is supported. Debian 13 (Trixie) is the reference distribution.
-- **macOS** — Docker images work, but the systemd-based boot-chain in Step 9.5
-  has no direct equivalent (macOS uses launchd). Manual `docker compose up`
-  works for initial validation; reboot-clean orchestration on Mac needs a
-  separate launchd plist not yet written. See `docs/FOLLOWUPS.md` FU-1.
+- **macOS** — supported via Colima (NOT Docker Desktop — Desktop needs a
+  logged-in GUI session, which defeats headless reboot resilience) plus the
+  launchd boot chain in `deploy/launchd/` (Step 9.5-mac). One structural
+  caveat: Postgres cannot bind the tailnet IP under Colima, so every compose
+  command on macOS adds `-f docker/docker-compose.macos.yml` (the Step 3
+  alias bakes this in). FileVault must be off.
 - Network access to Cloudflare (outbound HTTPS + QUIC on 443) and the
   Tailscale coordination server.
 - ~10 GB free disk for Docker + Postgres data + JSON content. More if
@@ -61,6 +63,11 @@ docker --version 2>/dev/null || echo "no docker yet"
 tailscale --version 2>/dev/null || echo "no tailscale yet"
 ```
 
+macOS notes: `ss` doesn't exist — use
+`sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(5432|8000|80|443)\b'`.
+And `df -h /` measures the Mac's disk; the actual capacity bound for
+Postgres is the Colima VM disk you'll size in Step 1 (`--disk 20`).
+
 If 5432 is occupied by a host-level Postgres, follow `PHASE_2A` Step 0a
 (`sudo systemctl stop postgresql && sudo systemctl disable postgresql`)
 before continuing.
@@ -75,14 +82,32 @@ newgrp docker
 docker version
 ```
 
-macOS: install Docker Desktop and let it boot. `docker compose version`
-should succeed.
+macOS (Colima):
+```bash
+brew install colima docker docker-compose
+# Wire the compose plugin per `brew info docker-compose` (cliPluginsExtraDirs
+# in ~/.docker/config.json), then:
+colima start --cpu 2 --memory 4 --disk 20
+docker compose version
+```
 
 ## Step 2 — Install Tailscale and join
 
+Linux:
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
+tailscale ip -4
+```
+
+macOS — use Homebrew tailscaled as a system daemon, **NOT the GUI app**: the
+GUI app only starts after a user logs in, so with it the Step 9.5-mac boot
+chain waits forever on every headless reboot. (Everything works
+interactively either way, which is exactly why this bites at drill time.)
+```bash
+brew install tailscale
+sudo brew services start tailscale       # root LaunchDaemon (needed for utun)
+sudo tailscale up --operator="$USER"     # lets you run the CLI without sudo
 tailscale ip -4
 ```
 
@@ -106,6 +131,14 @@ git checkout main
 # Same QoL alias as hrserv-1, but pointing at the REPLICA compose file:
 echo "alias dc='docker compose -f docker/docker-compose.replica.yml'" >> ~/.bashrc
 source ~/.bashrc
+```
+
+On macOS, the alias must also include the Colima port-binding override (and
+lands in `~/.zshrc`):
+
+```bash
+echo "alias dc='docker compose -f /opt/hrserv/docker/docker-compose.replica.yml -f /opt/hrserv/docker/docker-compose.macos.yml'" >> ~/.zshrc
+source ~/.zshrc
 ```
 
 ## Step 4 — On hrserv-1: open replication to this peer
@@ -278,6 +311,10 @@ ready when needed.
 
 ## Step 9 — Bring up the stack
 
+On macOS, add `-f docker/docker-compose.macos.yml` to every command below
+(or just use the `dc` alias from Step 3, which includes it) — the replica
+file alone tries the tailnet-IP bind that cannot work under Colima.
+
 ```bash
 cd /opt/hrserv
 docker compose -f docker/docker-compose.replica.yml up -d
@@ -301,8 +338,8 @@ assigning the tailnet IP → port allocation fails → containerd kills the
 container → manual `systemctl restart` needed to recover.
 
 This step installs the same three-layer boot orchestration that
-`PHASE_2A_HRSERV1_SETUP.md` §9a uses on hrserv-1. Skip on macOS until the
-launchd equivalent lands (`docs/FOLLOWUPS.md` FU-1).
+`PHASE_2A_HRSERV1_SETUP.md` §9a uses on hrserv-1. On macOS, skip to
+Step 9.5-mac instead.
 
 ### 9.5.i — WiFi auto-connect at boot (Debian)
 
@@ -366,6 +403,44 @@ If `hrserv.service` is `failed` after reboot, see
 `docs/NETWORK_TROUBLESHOOTING.md` "SSH from Mac to jib-jab is hanging" — the
 diagnostic ladder there applies to any reboot-clean failure on the boot chain.
 
+## Step 9.5-mac — Wire the boot chain for clean reboots (macOS / Colima)
+
+The launchd equivalent of Step 9.5, using two LaunchDaemons that run before
+login (no auto-login needed): `com.hrfunc.colima` (waits for the tailnet IP,
+then runs the Colima VM in the foreground) and `com.hrfunc.hrserv` (waits for
+dockerd, then a clean `compose down && up -d`). Full design rationale,
+host-hygiene checklist (FileVault OFF, `pmset autorestart`, Homebrew
+tailscaled as a system daemon instead of the GUI app), and troubleshooting
+live in `deploy/launchd/README.md` — read it once before installing.
+
+```bash
+# One-time host settings (details in deploy/launchd/README.md):
+sudo pmset -a sleep 0 displaysleep 10 autorestart 1
+fdesetup status        # must be Off
+
+# If colima is currently under brew services, hand ownership to our daemon:
+brew services stop colima 2>/dev/null || true
+
+sudo /opt/hrserv/deploy/launchd/install.sh
+```
+
+The installer checks preconditions, renders your username into the plists,
+and installs them WITHOUT starting anything — the next reboot activates the
+chain.
+
+### Verify with a deliberate reboot
+
+```bash
+sudo reboot
+# Wait ~2-3 minutes, SSH back in (over Tailscale), and:
+launchctl print system/com.hrfunc.colima | grep -E 'state|last exit code'   # state = running
+launchctl print system/com.hrfunc.hrserv | grep -E 'state|last exit code'   # last exit code = 0
+tail -40 /opt/hrserv/logs/launchd-hrserv.log                                # healthy `compose ps` table
+dc ps                                                                        # all three services up, postgres healthy
+```
+
+Run the drill at least twice — boot races don't always fire on the first try.
+
 ## Step 10 — Verify replication is healthy
 
 On hrserv-1 (the primary):
@@ -428,6 +503,11 @@ For a production replica (the Mac Mini in August):
    `RESTIC_REPOSITORY` env on hrserv-1.
 2. Configure `scripts/backup.sh` to cross-ship dumps from hrserv-1 to this
    node over Tailscale. Add a cron entry on hrserv-1 (`15 3 * * *`).
+   If this node is a Mac: enable Remote Login (System Settings → Sharing)
+   so hrserv-1 can rsync in, and create a `PEER_DIR` the operator owns.
+   Note `backup.sh` itself is Linux-only today and must be ported before
+   it ever RUNS ON a Mac node (see `docs/FOLLOWUPS.md` §"backup.sh is
+   Linux-only") — receiving dumps is fine.
 3. **Run the restore drill** on a scratch container per
    `BACKUP_RESTORE.md` §"Restore drill". Until this drill succeeds,
    backups don't count.

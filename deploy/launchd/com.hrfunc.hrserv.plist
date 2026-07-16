@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.hrfunc.hrserv — macOS equivalent of deploy/hrserv.service (systemd).
+
+  Runs at boot: waits for the docker daemon (i.e. for com.hrfunc.colima's
+  VM to finish booting), then runs a clean `docker compose down && up -d`,
+  exactly like the Linux unit. launchd has no dependency ordering between
+  daemons, so the ordering is enforced by the wait loop in hrserv-up.sh, not
+  by launchd itself.
+
+  KeepAlive with SuccessfulExit=false makes this "retry until the first
+  success": if the script times out waiting for dockerd (exit 1) — say the
+  tailnet took unusually long and colima itself was still retrying — launchd
+  re-runs it every 30s instead of giving the stack exactly one 300s chance
+  per boot. Retrying is safe because the script IS the idempotent clean
+  down/up. After the first exit 0, launchd leaves it alone: runtime crash
+  recovery of individual containers stays with compose's
+  `restart: unless-stopped`, same jurisdiction split as documented in
+  deploy/hrserv.service.
+
+  Re-running it later is DISRUPTIVE (`down` kills in-flight requests) — same
+  warning as `systemctl restart hrserv` on Linux. If you must:
+      sudo launchctl kickstart -k system/com.hrfunc.hrserv
+
+  Install via deploy/launchd/install.sh. Full runbook: deploy/launchd/README.md
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hrfunc.hrserv</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/hrserv/deploy/launchd/bin/hrserv-up.sh</string>
+    </array>
+
+    <key>UserName</key>
+    <string>REPLACE_WITH_OPERATOR_USER</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/REPLACE_WITH_OPERATOR_USER</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/opt/hrserv/logs/launchd-hrserv.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/hrserv/logs/launchd-hrserv.log</string>
+</dict>
+</plist>
