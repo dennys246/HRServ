@@ -317,9 +317,24 @@ ready when needed.
 
 ## Step 9 — Bring up the stack
 
-On macOS, add `-f docker/docker-compose.macos.yml` to every command below
-(or just use the `dc` alias from Step 3, which includes it) — the replica
-file alone tries the tailnet-IP bind that cannot work under Colima.
+**First, on any fresh clone:** substitute the pg_hba placeholder or
+Postgres will crash-loop on startup — the committed
+`docker/postgres/pg_hba.conf` ships a literal
+`REPLACE_WITH_PEER_TAILSCALE_IP` that Postgres 16 refuses to parse
+(discovered live on big-mac-mini, 2026-07-15):
+
+```bash
+./scripts/configure_pg_hba.sh 127.0.0.1
+```
+
+`127.0.0.1` is the parking value per the file's own header — parses
+cleanly, authorizes no real replication peer. The real peer IP replaces it
+only when THIS node serves replication (post-promotion; see
+`docs/FAILOVER.md` §"macOS/Colima notes" item 3 for the macOS caveats).
+
+On macOS, also add `-f docker/docker-compose.macos.yml` to every command
+below (or just use the `dc` alias from Step 3, which includes it) — the
+replica file alone tries the tailnet-IP bind that cannot work under Colima.
 
 ```bash
 cd /opt/hrserv
