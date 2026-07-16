@@ -17,11 +17,20 @@
 # produced, but deterministic: it would fail on every boot).
 #
 # Instead we bind loopback, which Colima forwards to the macOS host's
-# 127.0.0.1. Postgres is then reachable only from the Mac itself. When this
-# node must serve Postgres to a tailnet peer (i.e. once it is a PRIMARY that
-# a replica dials into), expose it tailnet-only via:
+# 127.0.0.1. Postgres is then reachable only from the Mac itself.
 #
-#   tailscale serve --bg --tcp 5432 tcp://127.0.0.1:5432
+# Host port 15432, not 5432: the Mini's Colima VM is shared with other
+# projects whose stacks auto-start at boot (avserv-dev publishes
+# 127.0.0.1:5432, discovered 2026-07-15) — a shared default port means a
+# nondeterministic race at every reboot. A dedicated port makes boot
+# deterministic regardless of what else the VM runs. Local psql:
+# `psql -h 127.0.0.1 -p 15432`.
+#
+# When this node must serve Postgres to a tailnet peer (i.e. once it is a
+# PRIMARY that a replica dials into), expose it tailnet-only via (note the
+# peer-facing port stays 5432; only the local proxy target is 15432):
+#
+#   tailscale serve --bg --tcp 5432 tcp://127.0.0.1:15432
 #
 # — see deploy/launchd/README.md §"Postgres over the tailnet on macOS" for
 # the pg_hba.conf implications before doing this. As a replica (outbound
@@ -33,4 +42,4 @@
 services:
   postgres:
     ports: !override
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:15432:5432"

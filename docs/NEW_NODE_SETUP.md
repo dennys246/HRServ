@@ -64,7 +64,10 @@ tailscale --version 2>/dev/null || echo "no tailscale yet"
 ```
 
 macOS notes: `ss` doesn't exist — use
-`sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(5432|8000|80|443)\b'`.
+`sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(15432|8000|80|443)\b'`
+(HRServ's host bind is 15432 on macOS, per `docker/docker-compose.macos.yml` —
+a busy 5432 is fine and expected if the box hosts other projects). Also
+check for container-side squatters: `docker ps --format '{{.Names}}\t{{.Ports}}'`.
 And `df -h /` measures the Mac's disk; the actual capacity bound for
 Postgres is the Colima VM disk you'll size in Step 1 (`--disk 20`).
 

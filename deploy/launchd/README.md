@@ -29,8 +29,11 @@ because Colima's VM state and the docker socket live in the operator's home.
    Lima VM where `${TAILSCALE_IP}` doesn't exist on any interface, so the role
    compose files' `${TAILSCALE_IP}:5432:5432` fails with "cannot assign
    requested address". `docker/docker-compose.macos.yml` overrides the bind to
-   `127.0.0.1:5432` — always pass it as a second `-f`. (`TAILSCALE_IP` stays
-   required in `docker/.env`; the boot script uses it as the wait target.)
+   `127.0.0.1:15432` — always pass it as a second `-f`. (`TAILSCALE_IP` stays
+   required in `docker/.env`; the boot script uses it as the wait target.
+   15432 rather than 5432 because the Colima VM is shared with other
+   projects' stacks that auto-start at boot — a dedicated port removes the
+   reboot race for 5432. Local psql: `psql -h 127.0.0.1 -p 15432`.)
 2. **FileVault must be OFF** (`fdesetup status`). With FileVault on, boot
    stops at the disk-unlock screen and nothing below ever runs.
 3. **Tailscale via Homebrew as a system daemon**, not the GUI app (which only
@@ -128,7 +131,7 @@ it, expose 5432 tailnet-only via Tailscale's TCP proxy (persists across
 reboots in tailscaled state; one-time):
 
 ```bash
-tailscale serve --bg --tcp 5432 tcp://127.0.0.1:5432
+tailscale serve --bg --tcp 5432 tcp://127.0.0.1:15432
 tailscale serve status
 ```
 

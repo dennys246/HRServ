@@ -76,7 +76,8 @@ and prepare these BEFORE a failover window, not during one:
    §"Compose-file role coupling".)
 3. **Serving replication to the peer requires `tailscale serve` + a pg_hba
    decision.** Postgres binds loopback on macOS; expose 5432 tailnet-only
-   with `tailscale serve --bg --tcp 5432 tcp://127.0.0.1:5432`. Proxied
+   with `tailscale serve --bg --tcp 5432 tcp://127.0.0.1:15432` (the host
+   bind is 15432 on macOS; peers still dial tailnet port 5432). Proxied
    connections reach Postgres with a Docker-bridge source address, NOT the
    peer's tailnet IP — the `<peer-ip>/32` replication rule never matches, and
    `scripts/configure_pg_hba.sh` cannot express the `172.16.0.0/12` rule
