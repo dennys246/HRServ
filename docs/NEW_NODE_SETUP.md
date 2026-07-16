@@ -63,6 +63,11 @@ docker --version 2>/dev/null || echo "no docker yet"
 tailscale --version 2>/dev/null || echo "no tailscale yet"
 ```
 
+macOS notes: `ss` doesn't exist — use
+`sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(5432|8000|80|443)\b'`.
+And `df -h /` measures the Mac's disk; the actual capacity bound for
+Postgres is the Colima VM disk you'll size in Step 1 (`--disk 20`).
+
 If 5432 is occupied by a host-level Postgres, follow `PHASE_2A` Step 0a
 (`sudo systemctl stop postgresql && sudo systemctl disable postgresql`)
 before continuing.
@@ -88,9 +93,21 @@ docker compose version
 
 ## Step 2 — Install Tailscale and join
 
+Linux:
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
+tailscale ip -4
+```
+
+macOS — use Homebrew tailscaled as a system daemon, **NOT the GUI app**: the
+GUI app only starts after a user logs in, so with it the Step 9.5-mac boot
+chain waits forever on every headless reboot. (Everything works
+interactively either way, which is exactly why this bites at drill time.)
+```bash
+brew install tailscale
+sudo brew services start tailscale       # root LaunchDaemon (needed for utun)
+sudo tailscale up --operator="$USER"     # lets you run the CLI without sudo
 tailscale ip -4
 ```
 
@@ -294,6 +311,10 @@ ready when needed.
 
 ## Step 9 — Bring up the stack
 
+On macOS, add `-f docker/docker-compose.macos.yml` to every command below
+(or just use the `dc` alias from Step 3, which includes it) — the replica
+file alone tries the tailnet-IP bind that cannot work under Colima.
+
 ```bash
 cd /opt/hrserv
 docker compose -f docker/docker-compose.replica.yml up -d
@@ -302,9 +323,6 @@ docker compose -f docker/docker-compose.replica.yml ps
 docker compose -f docker/docker-compose.replica.yml logs --tail 30 postgres
 docker compose -f docker/docker-compose.replica.yml logs --tail 30 hrserv
 ```
-
-(macOS: add `-f docker/docker-compose.macos.yml` to each command — or just
-use the `dc` alias from Step 3, which includes it.)
 
 Expected log signals:
 - `postgres`: lines about `started streaming WAL from primary at ...`
@@ -485,6 +503,11 @@ For a production replica (the Mac Mini in August):
    `RESTIC_REPOSITORY` env on hrserv-1.
 2. Configure `scripts/backup.sh` to cross-ship dumps from hrserv-1 to this
    node over Tailscale. Add a cron entry on hrserv-1 (`15 3 * * *`).
+   If this node is a Mac: enable Remote Login (System Settings → Sharing)
+   so hrserv-1 can rsync in, and create a `PEER_DIR` the operator owns.
+   Note `backup.sh` itself is Linux-only today and must be ported before
+   it ever RUNS ON a Mac node (see `docs/FOLLOWUPS.md` §"backup.sh is
+   Linux-only") — receiving dumps is fine.
 3. **Run the restore drill** on a scratch container per
    `BACKUP_RESTORE.md` §"Restore drill". Until this drill succeeds,
    backups don't count.

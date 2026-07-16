@@ -43,12 +43,31 @@ if [[ ! -f "$HRSERV_DIR/docker/.env" ]]; then
     echo "ERROR: $HRSERV_DIR/docker/.env missing — do NEW_NODE_SETUP Step 7 first." >&2
     fail=1
 fi
-if ! sudo -u "$OPERATOR" -H /opt/homebrew/bin/docker compose version >/dev/null 2>&1; then
-    echo "ERROR: 'docker compose' not working for $OPERATOR — wire the brew compose" >&2
-    echo "plugin (cliPluginsExtraDirs in ~/.docker/config.json; see 'brew info docker-compose')." >&2
+# One check that validates three things at once: the compose plugin is wired
+# for the operator, compose is new enough to parse `ports: !override`
+# (>= 2.24, required by docker-compose.macos.yml), and docker/.env
+# interpolates the role file cleanly. No docker daemon needed for `config`.
+if ! sudo -u "$OPERATOR" -H /opt/homebrew/bin/docker compose \
+        -f "$HRSERV_DIR/docker/docker-compose.replica.yml" \
+        -f "$HRSERV_DIR/docker/docker-compose.macos.yml" \
+        config --quiet; then
+    echo "ERROR: compose config validation failed for $OPERATOR. Either the brew" >&2
+    echo "compose plugin isn't wired (cliPluginsExtraDirs in ~/.docker/config.json;" >&2
+    echo "see 'brew info docker-compose'), compose is < 2.24 (can't parse" >&2
+    echo "'ports: !override'), or docker/.env is missing required values —" >&2
+    echo "the compose error above says which." >&2
     fail=1
 fi
 [[ $fail -eq 0 ]] || exit 1
+
+if [[ "$LAUNCHD_DIR" != "$HRSERV_DIR/deploy/launchd" ]]; then
+    echo "WARNING: running from $LAUNCHD_DIR but the installed daemons will execute" >&2
+    echo "scripts from $HRSERV_DIR/deploy/launchd — make sure that checkout is current." >&2
+fi
+
+# Resolve the operator's real home dir instead of assuming /Users/<name>.
+OPERATOR_HOME="$(dscl . -read "/Users/$OPERATOR" NFSHomeDirectory 2>/dev/null | sed 's/^NFSHomeDirectory: //')"
+OPERATOR_HOME="${OPERATOR_HOME:-/Users/$OPERATOR}"
 
 # FileVault halts boot at the disk-unlock screen — fatal for headless reboots.
 if fdesetup status | grep -q "FileVault is On"; then
@@ -63,10 +82,16 @@ chmod 755 "$LAUNCHD_DIR"/bin/*.sh
 
 for name in "${DAEMONS[@]}"; do
     target="/Library/LaunchDaemons/$name.plist"
-    sed "s/REPLACE_WITH_OPERATOR_USER/$OPERATOR/g" "$LAUNCHD_DIR/$name.plist" > "$target"
-    chown root:wheel "$target"
-    chmod 644 "$target"
-    plutil -lint -s "$target"
+    # Render + lint in a temp file FIRST — never leave a malformed plist
+    # installed. HOME path is substituted before the bare username so the
+    # /Users/<placeholder> pattern still matches.
+    rendered="$(mktemp -t "$name")"
+    sed -e "s|/Users/REPLACE_WITH_OPERATOR_USER|$OPERATOR_HOME|g" \
+        -e "s/REPLACE_WITH_OPERATOR_USER/$OPERATOR/g" \
+        "$LAUNCHD_DIR/$name.plist" > "$rendered"
+    plutil -lint -s "$rendered"
+    install -m 644 -o root -g wheel "$rendered" "$target"
+    rm -f "$rendered"
     # Never bootout here: on a live host that would kill the running Colima
     # VM (and with it the stack). launchd re-reads /Library/LaunchDaemons at
     # boot, so the updated plist simply takes effect on the next reboot.

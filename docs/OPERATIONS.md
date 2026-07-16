@@ -214,6 +214,14 @@ Recurred on 2026-05-15 after jib-jab was physically relocated. Symptom:
 `cloudflared` and `postgres` containers report healthy, but `hrserv` is
 `unhealthy`. External requests get Cloudflare 502.
 
+> **macOS/Colima node?** The systemd/journalctl commands below have no
+> meaning there. Analogues: recovery is
+> `sudo launchctl kickstart -k system/com.hrfunc.hrserv` (the
+> `systemctl restart hrserv` equivalent), escalation is
+> `sudo launchctl kickstart -k system/com.hrfunc.colima`, and the boot
+> logs live in `/opt/hrserv/logs/launchd-*.log`. Full ladder:
+> `deploy/launchd/README.md` §Troubleshooting.
+
 **Root cause** (identified after parallel review): docker's restart
 manager brings containers up before the host network is fully ready AND
 bypasses compose's `depends_on: service_healthy` gate. hrserv's lifespan

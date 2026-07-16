@@ -58,6 +58,13 @@
     <key>ThrottleInterval</key>
     <integer>30</integer>
 
+    <!-- Shutdown grace: launchd's default is SIGKILL 20s after SIGTERM,
+         which hard-kills the Lima VM mid-shutdown (Postgres inside it gets
+         no clean stop -> crash recovery + stale-lock risk on next boot).
+         120s mirrors TimeoutStopSec=120 on the Linux unit. -->
+    <key>ExitTimeOut</key>
+    <integer>120</integer>
+
     <key>StandardOutPath</key>
     <string>/opt/hrserv/logs/launchd-colima.log</string>
     <key>StandardErrorPath</key>

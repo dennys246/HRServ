@@ -14,6 +14,23 @@
 >
 > Until Phase 2c lands, also see `docs/BACKUP_RESTORE.md` — backups are
 > similarly aspirational.
+>
+> **Update 2026-07-15:** the Mac Mini (`big-mac-mini`) is being stood up as
+> the replica under Colima + launchd (`docs/NEW_NODE_SETUP.md` incl. Step
+> 9.5-mac, `deploy/launchd/`). Once it's streaming, this runbook becomes
+> executable — after the known issues below are fixed, and with the
+> macOS/Colima notes section observed.
+
+> **🐛 KNOWN ISSUES (verified 2026-07-15, unfixed — promotion will NOT work
+> as written):** `scripts/promote_replica.sh` has two bugs, platform-independent:
+> (a) line 82 runs `pg_ctl promote` via `docker compose exec`, which executes
+> as **root** in the postgres image; `pg_ctl` refuses to run as root, so the
+> script aborts before promoting (needs `exec -T -u postgres`). (b) line 88's
+> `NODE_ROLE=primary docker compose up` is a **no-op**: the compose file
+> hardcodes `NODE_ROLE: replica` as a literal, so the env prefix changes
+> nothing and hrserv keeps 503ing writes after "successful" promotion.
+> Fix + tests tracked in `docs/FOLLOWUPS.md` §"promote_replica.sh cannot
+> actually promote" — must land before any real failover.
 
 When the current primary is unrecoverable, promote the current replica. This
 is a manual process — the wrong promotion at the wrong time produces
@@ -37,6 +54,40 @@ Try these first, in order:
 
 Failover is only the answer if the current primary is truly gone or so degraded that
 restarting it isn't an option.
+
+## macOS/Colima notes — read BEFORE promoting a Mac replica
+
+On a Mac node the stack runs under Colima (dockerd inside a Lima VM) with the
+boot chain in `deploy/launchd/`. Four deltas from a Linux promotion — decide
+and prepare these BEFORE a failover window, not during one:
+
+1. **Always pair role files with the macOS override.** Every compose command
+   on a Mac adds `-f docker/docker-compose.macos.yml` after the role file.
+   Running `docker-compose.primary.yml` alone recreates Postgres with the
+   `${TAILSCALE_IP}:5432` bind, which deterministically fails under Colima —
+   Postgres down mid-failover. The `dc` alias also hardcodes the replica
+   file; update it at promotion.
+2. **Flip the boot chain's role.** After promoting, set
+   `COMPOSE_ROLE_FILE="docker-compose.primary.yml"` in
+   `deploy/launchd/bin/hrserv-up.sh`. Otherwise the next reboot quietly
+   brings the node back up as a replica: every upload 503s while `/healthz`
+   stays green, so uptime monitoring never fires. (This file is git-tracked —
+   a later `git pull`/checkout can revert the edit. See FOLLOWUPS
+   §"Compose-file role coupling".)
+3. **Serving replication to the peer requires `tailscale serve` + a pg_hba
+   decision.** Postgres binds loopback on macOS; expose 5432 tailnet-only
+   with `tailscale serve --bg --tcp 5432 tcp://127.0.0.1:5432`. Proxied
+   connections reach Postgres with a Docker-bridge source address, NOT the
+   peer's tailnet IP — the `<peer-ip>/32` replication rule never matches, and
+   `scripts/configure_pg_hba.sh` cannot express the `172.16.0.0/12` rule
+   you'd need (it validates bare IPv4s and appends `/32`). Trade-offs and
+   alternatives: `deploy/launchd/README.md` §"Postgres over the tailnet on
+   macOS". Afterwards, expect `pg_stat_replication.client_addr` to show the
+   bridge address — that's the proxying, not a bug (adjusts Step 5.6's
+   verification and NEW_NODE_SETUP Step 10's expected output).
+4. **Backups.** `scripts/backup.sh` is Linux-only today (`shred`, `/var`
+   paths, cron scheduling). It must be ported before a Mac node is primary —
+   tracked in `docs/FOLLOWUPS.md` §"backup.sh is Linux-only".
 
 ## Step 1 — fence the old primary
 
@@ -98,10 +149,11 @@ infra notes. Then, once the old primary returns:
 4. Update `primary_conninfo` in `replica.conf` to point at the new primary's tailnet IP.
 5. Bring it up as the new replica (i.e. switch to `docker-compose.replica.yml`).
 6. Verify replication: insert a test row on the new primary, confirm it appears on the new replica.
-7. **Boot-chain install on the resurrected node.** Run `docs/NEW_NODE_SETUP.md` Step 9.5 on the
-   newly-demoted node so it survives reboots cleanly. The replica's compose file also binds
-   `${TAILSCALE_IP}:5432`, so the same wait-for-tailscale drop-in is required — without it,
-   any reboot will reproduce the 2026-05-16 outage on the demoted node.
+7. **Boot-chain install on the resurrected node.** Run `docs/NEW_NODE_SETUP.md` Step 9.5
+   (Linux) or Step 9.5-mac (macOS) on the newly-demoted node so it survives reboots cleanly.
+   On Linux the replica's compose file binds `${TAILSCALE_IP}:5432`, so the wait-for-tailscale
+   drop-in is required — without it, any reboot reproduces the 2026-05-16 outage. On macOS the
+   bind is loopback and the launchd chain handles the ordering.
 
 ## Step 6 — post-mortem
 

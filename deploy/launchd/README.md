@@ -141,8 +141,10 @@ will not match, and would need to become a Docker-bridge-range rule
 bind is loopback-only and `tailscale serve` accepts tailnet traffic only, but
 this IS a weaker in-database restriction than the Linux setup. Alternatives
 (Lima port-forward config, subnet-routing the VM) exist if this trade-off is
-unacceptable — evaluate at promotion time, not in a hurry during failover.
-This is called out in `docs/FAILOVER.md` prep rather than silently changed.
+unacceptable — evaluate BEFORE a promotion window, never in a hurry during
+failover. `docs/FAILOVER.md` §"macOS/Colima notes" carries the checklist
+(this pg_hba decision, the `COMPOSE_ROLE_FILE` flip, the always-pair-the-
+override rule, and the backup.sh port).
 
 ## Files
 
@@ -151,8 +153,16 @@ This is called out in `docs/FAILOVER.md` prep rather than silently changed.
   installer renders it)
 - `bin/colima-up.sh` — tailnet wait + `colima start --foreground`
 - `bin/hrserv-up.sh` — dockerd wait + clean `compose down && up -d`; role
-  compose file is selected by `COMPOSE_ROLE_FILE` at the top of the script
-- `install.sh` — precondition checks + render + copy + lint
+  compose file is selected by `COMPOSE_ROLE_FILE` at the top of the script.
+  The macOS override pairs with EITHER role file — after a promotion, set
+  `COMPOSE_ROLE_FILE="docker-compose.primary.yml"` and never run a role file
+  on macOS without the override (see `docs/FAILOVER.md` §"macOS/Colima notes")
+- `install.sh` — precondition checks (incl. a merged compose-config dry run,
+  which also pins compose ≥ 2.24 for `!override`) + render + lint + install
+
+Logs under `/opt/hrserv/logs/` grow unbounded by default; if the box runs
+for months, add a rotation entry, e.g. `/etc/newsyslog.d/hrserv.conf`:
+`/opt/hrserv/logs/*.log <operator>:staff 644 5 1024 * J`
 
 CI validates these statically (`tests/test_deploy_artifacts.py`): plists
 parse and reference scripts that exist, scripts pass `bash -n`, the compose

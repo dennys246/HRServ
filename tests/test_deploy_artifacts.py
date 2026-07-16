@@ -25,6 +25,12 @@ LAUNCHD_DIR = REPO_ROOT / "deploy" / "launchd"
 MACOS_OVERRIDE = REPO_ROOT / "docker" / "docker-compose.macos.yml"
 
 PLIST_NAMES = ["com.hrfunc.colima.plist", "com.hrfunc.hrserv.plist"]
+# Each daemon must run ITS script — a crossed wiring would pass every other
+# structural check while booting the wrong thing.
+PLIST_SCRIPT = {
+    "com.hrfunc.colima.plist": "colima-up.sh",
+    "com.hrfunc.hrserv.plist": "hrserv-up.sh",
+}
 SCRIPT_PATHS = [
     LAUNCHD_DIR / "bin" / "colima-up.sh",
     LAUNCHD_DIR / "bin" / "hrserv-up.sh",
@@ -34,7 +40,8 @@ SCRIPT_PATHS = [
 
 def _load_plist(name: str) -> dict[str, Any]:
     with (LAUNCHD_DIR / name).open("rb") as f:
-        return plistlib.load(f)
+        data: dict[str, Any] = plistlib.load(f)
+    return data
 
 
 def test_expected_artifacts_exist() -> None:
@@ -81,22 +88,28 @@ def test_plist_program_is_a_repo_script(name: str) -> None:
     repo_relative = REPO_ROOT / program.relative_to("/opt/hrserv")
     assert repo_relative.is_file(), f"{program} has no counterpart in the repo"
     assert repo_relative.stat().st_mode & 0o111, f"{repo_relative} is not executable"
+    assert program.name == PLIST_SCRIPT[name], "plist wired to the wrong boot script"
 
 
-def test_colima_daemon_restarts_only_on_failure() -> None:
-    plist = _load_plist("com.hrfunc.colima.plist")
-    # SuccessfulExit=false: relaunch a crashed VM, but leave an operator's
-    # clean `colima stop` alone.
+@pytest.mark.parametrize("name", PLIST_NAMES)
+def test_daemons_retry_until_first_success(name: str) -> None:
+    plist = _load_plist(name)
+    # SuccessfulExit=false on both: relaunch on failure (colima: crashed VM
+    # or tailnet-wait timeout; hrserv: dockerd-wait timeout), but leave a
+    # clean exit alone — after hrserv's first successful down/up, runtime
+    # crash recovery belongs to compose `restart: unless-stopped`, and an
+    # operator's deliberate `colima stop` must stay stopped.
     assert plist["KeepAlive"] == {"SuccessfulExit": False}
     # A failing wait loop must back off, not hot-loop.
     assert plist["ThrottleInterval"] >= 10
 
 
-def test_hrserv_daemon_is_oneshot() -> None:
-    plist = _load_plist("com.hrfunc.hrserv.plist")
-    # Runtime crash recovery belongs to compose `restart: unless-stopped`;
-    # launchd must not re-run the disruptive down/up cycle on its own.
-    assert plist["KeepAlive"] is False
+def test_colima_daemon_gets_shutdown_grace() -> None:
+    plist = _load_plist("com.hrfunc.colima.plist")
+    # launchd's default ExitTimeOut is 20s SIGTERM->SIGKILL, which hard-kills
+    # the Lima VM (and Postgres inside it) on every reboot. Mirror the Linux
+    # unit's TimeoutStopSec=120.
+    assert plist["ExitTimeOut"] >= 60
 
 
 @pytest.mark.parametrize("script", SCRIPT_PATHS, ids=lambda p: p.name)
@@ -118,8 +131,22 @@ def test_script_waits_are_bounded(script: Path) -> None:
     text = script.read_text()
     assert "set -euo pipefail" in text
     if script.name != "install.sh":
-        assert "deadline" in text, "wait loop must enforce a deadline"
+        # The deadline must actually be COMPARED, not just computed — a
+        # deleted comparison with the variable left behind must fail here.
+        assert re.search(r"SECONDS\s*>=\s*deadline", text), "wait loop must enforce its deadline"
         assert re.search(r"exit 1", text), "timeout must exit nonzero so launchd sees failure"
+
+
+def test_install_sed_patterns_match_plist_placeholders() -> None:
+    """install.sh's sed must target the exact placeholders the plists carry.
+
+    Renaming a placeholder on either side alone would install unrendered
+    plists whose daemons run as a nonexistent user — and every other test
+    would stay green.
+    """
+    text = (LAUNCHD_DIR / "install.sh").read_text()
+    assert "s|/Users/REPLACE_WITH_OPERATOR_USER|" in text, "HOME sed pattern drifted"
+    assert "s/REPLACE_WITH_OPERATOR_USER/" in text, "username sed pattern drifted"
 
 
 def test_hrserv_script_uses_role_file_plus_macos_override() -> None:

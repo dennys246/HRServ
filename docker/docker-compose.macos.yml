@@ -2,6 +2,12 @@
 #
 #   docker compose -f docker/docker-compose.replica.yml \
 #                  -f docker/docker-compose.macos.yml up -d
+#   # or, after this node is promoted to primary:
+#   docker compose -f docker/docker-compose.primary.yml \
+#                  -f docker/docker-compose.macos.yml up -d
+#
+# NEVER run a role file alone on macOS — without this override the
+# ${TAILSCALE_IP} bind recreates and Postgres fails to start.
 #
 # Why this exists: under Colima, dockerd runs inside a Lima VM. The host's
 # tailnet IP (${TAILSCALE_IP}) is on the macOS host's tailscale interface,

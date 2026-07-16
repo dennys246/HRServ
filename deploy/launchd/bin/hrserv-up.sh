@@ -14,10 +14,11 @@
 #
 # ROLE SELECTION: COMPOSE_ROLE_FILE below is this host's role, mirroring how
 # the Linux unit hardcodes docker-compose.primary.yml. After a failover
-# promotion, update it here (see docs/FAILOVER.md step 5 and FOLLOWUPS.md
-# "Compose-file role coupling on failover"). The plist invokes this script
-# from the repo working tree, so the edit takes effect on the next boot —
-# no reinstall needed.
+# promotion, update it here (see docs/FAILOVER.md §"macOS/Colima notes" and
+# FOLLOWUPS.md "Compose-file role coupling on failover" — skipping this edit
+# means the next reboot silently demotes the node back to replica). The
+# plist invokes this script from the repo working tree, so the edit takes
+# effect on the next boot — no reinstall needed.
 #
 # Invoked by com.hrfunc.hrserv.plist; not intended for interactive use.
 set -euo pipefail
