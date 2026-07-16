@@ -43,6 +43,15 @@ if [[ ! -f "$HRSERV_DIR/docker/.env" ]]; then
     echo "ERROR: $HRSERV_DIR/docker/.env missing — do NEW_NODE_SETUP Step 7 first." >&2
     fail=1
 fi
+# The hrserv image build needs BuildKit (Dockerfile uses RUN --mount), and
+# unlike Linux Docker, Homebrew's docker CLI doesn't bundle buildx. Caught
+# live on big-mac-mini's first drill boot 2026-07-15.
+if ! sudo -u "$OPERATOR" -H /opt/homebrew/bin/docker buildx version >/dev/null 2>&1; then
+    echo "ERROR: 'docker buildx' not available for $OPERATOR — the hrserv image build" >&2
+    echo "requires BuildKit. Fix: brew install docker-buildx, and wire" >&2
+    echo "cliPluginsExtraDirs if needed (see 'brew info docker-buildx')." >&2
+    fail=1
+fi
 # One check that validates three things at once: the compose plugin is wired
 # for the operator, compose is new enough to parse `ports: !override`
 # (>= 2.24, required by docker-compose.macos.yml), and docker/.env

@@ -167,7 +167,9 @@ def test_macos_override_replaces_tailnet_port_bind() -> None:
     # `!override` is load-bearing: without it compose MERGES the ports lists
     # and the broken ${TAILSCALE_IP} bind comes back.
     assert "ports: !override" in text
-    assert '"127.0.0.1:5432:5432"' in text
+    # Host port 15432: the Colima VM is shared with other projects' stacks
+    # that also want loopback 5432 at boot (see the override's header).
+    assert '"127.0.0.1:15432:5432"' in text
     # The tailnet IP must not appear in effective YAML (comments explaining
     # why it can't be used are fine).
     effective = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))

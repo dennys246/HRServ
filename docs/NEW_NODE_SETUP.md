@@ -64,7 +64,10 @@ tailscale --version 2>/dev/null || echo "no tailscale yet"
 ```
 
 macOS notes: `ss` doesn't exist — use
-`sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(5432|8000|80|443)\b'`.
+`sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(15432|8000|80|443)\b'`
+(HRServ's host bind is 15432 on macOS, per `docker/docker-compose.macos.yml` —
+a busy 5432 is fine and expected if the box hosts other projects). Also
+check for container-side squatters: `docker ps --format '{{.Names}}\t{{.Ports}}'`.
 And `df -h /` measures the Mac's disk; the actual capacity bound for
 Postgres is the Colima VM disk you'll size in Step 1 (`--disk 20`).
 
@@ -84,11 +87,14 @@ docker version
 
 macOS (Colima):
 ```bash
-brew install colima docker docker-compose
-# Wire the compose plugin per `brew info docker-compose` (cliPluginsExtraDirs
-# in ~/.docker/config.json), then:
+brew install colima docker docker-compose docker-buildx
+# Wire the CLI plugins per `brew info docker-compose` (cliPluginsExtraDirs
+# in ~/.docker/config.json — covers buildx too), then:
 colima start --cpu 2 --memory 4 --disk 20
 docker compose version
+docker buildx version   # REQUIRED: the hrserv image build uses BuildKit
+                        # (RUN --mount); Homebrew's docker doesn't bundle
+                        # buildx the way Linux Docker does
 ```
 
 ## Step 2 — Install Tailscale and join
