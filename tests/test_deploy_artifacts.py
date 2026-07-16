@@ -170,6 +170,19 @@ def test_hrserv_script_uses_role_file_plus_macos_override() -> None:
     assert "COMPOSE_ROLE_FILE:-docker-compose.replica.yml" in text
 
 
+def test_both_role_files_feed_initdb_all_role_passwords() -> None:
+    """01-create-roles.sh hard-requires HRSERV_DB_PASSWORD and
+    REPLICATOR_PASSWORD. A role compose file that omits one from the
+    postgres environment aborts first boot mid-init on a fresh volume,
+    and the restart policy then boots a half-initialized cluster (healthy
+    postgres, no app role/schema)."""
+    for role_file in ("docker-compose.primary.yml", "docker-compose.replica.yml"):
+        text = (REPO_ROOT / "docker" / role_file).read_text()
+        postgres_env = text.split("environment:")[1]
+        for var in ("HRSERV_DB_PASSWORD", "REPLICATOR_PASSWORD"):
+            assert f"{var}: ${{{var}" in postgres_env, f"{role_file} postgres env lacks {var}"
+
+
 def test_macos_override_replaces_tailnet_port_bind() -> None:
     text = MACOS_OVERRIDE.read_text()
     # `!override` is load-bearing: without it compose MERGES the ports lists

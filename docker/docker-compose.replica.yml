@@ -34,6 +34,15 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       PRIMARY_TAILSCALE_IP: ${PRIMARY_TAILSCALE_IP:?set PRIMARY_TAILSCALE_IP}
       REPLICATOR_PASSWORD: ${REPLICATOR_PASSWORD:?set REPLICATOR_PASSWORD}
+      # Consumed only when initdb runs — i.e. scratch/drill stacks on a
+      # fresh volume; normal replicas are seeded by pg_basebackup and skip
+      # initdb entirely (see NEW_NODE_SETUP Step 7's password-symmetry
+      # note). Without it, 01-create-roles.sh's :? guard aborts the FIRST
+      # boot after initdb populates the data dir, and the restart policy
+      # then boots a half-initialized cluster: postgres healthy, but no
+      # app role, no replicator role, no schema — the app fails auth
+      # forever. Observed live on big-mac-mini 2026-07-15.
+      HRSERV_DB_PASSWORD: ${HRSERV_DB_PASSWORD:?set HRSERV_DB_PASSWORD}
     volumes:
       - pg_data_replica:/var/lib/postgresql/data
       - ./postgres/replica.conf:/etc/postgresql/postgresql.conf:ro
