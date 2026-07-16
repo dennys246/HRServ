@@ -84,11 +84,14 @@ docker version
 
 macOS (Colima):
 ```bash
-brew install colima docker docker-compose
-# Wire the compose plugin per `brew info docker-compose` (cliPluginsExtraDirs
-# in ~/.docker/config.json), then:
+brew install colima docker docker-compose docker-buildx
+# Wire the CLI plugins per `brew info docker-compose` (cliPluginsExtraDirs
+# in ~/.docker/config.json — covers buildx too), then:
 colima start --cpu 2 --memory 4 --disk 20
 docker compose version
+docker buildx version   # REQUIRED: the hrserv image build uses BuildKit
+                        # (RUN --mount); Homebrew's docker doesn't bundle
+                        # buildx the way Linux Docker does
 ```
 
 ## Step 2 — Install Tailscale and join
