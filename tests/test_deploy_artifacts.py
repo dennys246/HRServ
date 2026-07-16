@@ -149,6 +149,14 @@ def test_install_sed_patterns_match_plist_placeholders() -> None:
     assert "s/REPLACE_WITH_OPERATOR_USER/" in text, "username sed pattern drifted"
 
 
+def test_install_verifies_repo_mounted_in_colima_vm() -> None:
+    """Bind mounts resolve inside Colima's VM; a missing source silently
+    becomes an empty directory and Postgres crash-loops. install.sh must
+    probe visibility through the VM, not just on the Mac."""
+    text = (LAUNCHD_DIR / "install.sh").read_text()
+    assert "colima ssh" in text, "installer no longer probes the VM for the repo mount"
+
+
 def test_hrserv_script_uses_role_file_plus_macos_override() -> None:
     text = (LAUNCHD_DIR / "bin" / "hrserv-up.sh").read_text()
     # Same clean-boot semantics as deploy/hrserv.service: down before up,
