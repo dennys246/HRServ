@@ -157,6 +157,16 @@ def test_install_verifies_repo_mounted_in_colima_vm() -> None:
     assert "colima ssh" in text, "installer no longer probes the VM for the repo mount"
 
 
+def test_colima_script_self_heals_stale_lima_state() -> None:
+    """An unclean shutdown leaves Lima claiming Running with a dead
+    hostagent socket; `colima start` then fails on inspection forever.
+    The wrapper must detect the disagreement and force-reset — without
+    this, every hard reboot needs hands (observed live 2026-07-15)."""
+    text = (LAUNCHD_DIR / "bin" / "colima-up.sh").read_text()
+    assert "ha.sock" in text, "no hostagent liveness probe"
+    assert "stop -f colima" in text, "no stale-state force-reset"
+
+
 def test_hrserv_script_uses_role_file_plus_macos_override() -> None:
     text = (LAUNCHD_DIR / "bin" / "hrserv-up.sh").read_text()
     # Same clean-boot semantics as deploy/hrserv.service: down before up,

@@ -26,6 +26,7 @@ set -euo pipefail
 
 TAILSCALE_BIN="${TAILSCALE_BIN:-/opt/homebrew/bin/tailscale}"
 COLIMA_BIN="${COLIMA_BIN:-/opt/homebrew/bin/colima}"
+LIMACTL_BIN="${LIMACTL_BIN:-/opt/homebrew/bin/limactl}"
 HRSERV_DIR="${HRSERV_DIR:-/opt/hrserv}"
 TAILSCALE_WAIT_SECS="${TAILSCALE_WAIT_SECS:-120}"
 
@@ -67,6 +68,23 @@ while true; do
     sleep 2
 done
 log "tailnet IP $current_ip assigned; starting colima"
+
+# Self-heal stale Lima state from an UNCLEAN shutdown (hard reboot, power
+# loss, SIGKILL past the ExitTimeOut grace): Lima's bookkeeping still says
+# the instance is Running/Broken, but its hostagent is gone, and
+# `colima start` then fails forever with "errors inspecting instance:
+# ... ha.sock: connect: connection refused" — a retry loop that never
+# converges without hands. Observed live on big-mac-mini 2026-07-15 after
+# a reboot drill. When the recorded status and the hostagent socket
+# disagree, force-stop to reset the bookkeeping; when state is clean this
+# whole block is a no-op.
+HA_SOCK="$HOME/.colima/_lima/colima/ha.sock"
+lima_status="$("$LIMACTL_BIN" list --format '{{.Status}}' colima 2>/dev/null | head -1 | tr -d '[:space:]')" || lima_status=""
+if [[ -n "$lima_status" && "$lima_status" != "Stopped" ]] \
+    && ! curl -sf --max-time 3 --unix-socket "$HA_SOCK" http://lima-hostagent/v1/info >/dev/null 2>&1; then
+    log "Lima reports status '$lima_status' but the hostagent socket is dead — resetting stale state (unclean shutdown)"
+    "$LIMACTL_BIN" stop -f colima || true
+fi
 
 # Foreground so launchd owns the VM lifecycle (same invocation brew services
 # uses). If the VM is already running, colima exits 0 and, per
