@@ -573,3 +573,28 @@ promote_replica.sh entry). Port sketch: replace `shred -u` with `rm -P` (or
 brew `gshred`), move paths to operator-writable locations, schedule via
 launchd `StartCalendarInterval` instead of cron, then re-run the
 `BACKUP_RESTORE.md` restore drill from the Mac.
+
+## replica.conf's primary_conninfo env-expansion comment is false
+
+**Where:** `docker/postgres/replica.conf:5-6` and the `primary_conninfo`
+line below it.
+
+**Symptom:** The comment claims "Postgres 16 supports environment
+expansion" — PostgreSQL does not expand env vars in .conf files, on any
+version. The `${PRIMARY_TAILSCALE_IP}`/`${REPLICATOR_PASSWORD}` in that
+`primary_conninfo` are literal text. Nothing breaks today: the value is
+only consulted in standby mode, and the Phase C bootstrap
+(`pg_basebackup -R`, NEW_NODE_SETUP Step 6) writes the real conninfo into
+`postgresql.auto.conf`, which is read after postgresql.conf and wins. But
+if anyone ever removes auto.conf "to clean up," the standby silently tries
+to dial a host literally named `${PRIMARY_TAILSCALE_IP}`.
+
+**Why deferred:** Found 2026-07-15 while diagnosing the Mini's pg_hba
+crash-loop; fixing it means deciding the intended mechanism (delete the
+misleading line and rely on `-R`'s auto.conf, or template the file at
+deploy time), which deserves its own moment — not a drive-by during
+boot-chain work.
+
+**Resolve when:** Phase C, when the Mini is seeded via `pg_basebackup -R` —
+verify where `primary_conninfo` actually ends up, then delete the false
+comment and the dead line (or replace with a pointer to auto.conf).
