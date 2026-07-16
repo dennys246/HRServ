@@ -181,6 +181,15 @@ def test_both_role_files_feed_initdb_all_role_passwords() -> None:
         postgres_env = text.split("environment:")[1]
         for var in ("HRSERV_DB_PASSWORD", "REPLICATOR_PASSWORD"):
             assert f"{var}: ${{{var}" in postgres_env, f"{role_file} postgres env lacks {var}"
+        # The whole init pipeline, not just its env: without POSTGRES_DB and
+        # these mounts the entrypoint logs "ignoring
+        # /docker-entrypoint-initdb.d/*" and boots a roleless, schemaless
+        # cluster.
+        assert "POSTGRES_DB: hrserv" in postgres_env, f"{role_file} lacks POSTGRES_DB"
+        assert "./postgres/initdb:/docker-entrypoint-initdb.d:ro" in text, (
+            f"{role_file} lacks the initdb mount"
+        )
+        assert "../migrations:/migrations:ro" in text, f"{role_file} lacks the migrations mount"
 
 
 def test_macos_override_replaces_tailnet_port_bind() -> None:
