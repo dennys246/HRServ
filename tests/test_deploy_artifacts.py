@@ -165,6 +165,9 @@ def test_colima_script_self_heals_stale_lima_state() -> None:
     text = (LAUNCHD_DIR / "bin" / "colima-up.sh").read_text()
     assert "ha.sock" in text, "no hostagent liveness probe"
     assert "stop -f colima" in text, "no stale-state force-reset"
+    # Without LIMA_HOME, limactl looks in ~/.lima (empty) instead of
+    # colima's ~/.colima/_lima — the probe silently never fires.
+    assert 'LIMA_HOME="${LIMA_HOME:-$HOME/.colima/_lima}"' in text, "LIMA_HOME not exported"
 
 
 def test_hrserv_script_uses_role_file_plus_macos_override() -> None:
