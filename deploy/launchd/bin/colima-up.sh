@@ -30,6 +30,12 @@ LIMACTL_BIN="${LIMACTL_BIN:-/opt/homebrew/bin/limactl}"
 HRSERV_DIR="${HRSERV_DIR:-/opt/hrserv}"
 TAILSCALE_WAIT_SECS="${TAILSCALE_WAIT_SECS:-120}"
 
+# Colima keeps its Lima state under ~/.colima/_lima, NOT Lima's default
+# ~/.lima — without this, limactl sees no instances at all: the stale-state
+# probe below silently never fires, and a manual `limactl stop -f colima`
+# fails with "open ~/.lima/colima/lima.yaml: no such file".
+export LIMA_HOME="${LIMA_HOME:-$HOME/.colima/_lima}"
+
 log() { echo "$(date '+%Y-%m-%dT%H:%M:%S%z') colima-up: $*"; }
 
 # Tolerate the ways operators actually write .env values: quotes, trailing
