@@ -62,6 +62,10 @@ You will run this against a **scratch container** so you can't damage production
 
 ### Step 1 — bring up a scratch Postgres
 
+On a shared macOS host (big-mac-mini), prefix the `docker` commands in this
+drill with `--context colima` (or export `DOCKER_CONTEXT=colima` for the
+session) — the host's current Docker context may belong to a co-tenant.
+
 ```bash
 docker run --rm -d --name pg-restore-drill \
     -e POSTGRES_PASSWORD=drill \

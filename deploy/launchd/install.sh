@@ -31,6 +31,18 @@ if [[ -z "$OPERATOR" || "$OPERATOR" == "root" ]]; then
     exit 1
 fi
 
+# Resolve the operator's real home dir instead of assuming /Users/<name>.
+OPERATOR_HOME="$(dscl . -read "/Users/$OPERATOR" NFSHomeDirectory 2>/dev/null | sed 's/^NFSHomeDirectory: //')"
+OPERATOR_HOME="${OPERATOR_HOME:-/Users/$OPERATOR}"
+
+# Every docker call addresses HRServ's Colima engine explicitly. The host is
+# shared (AvServ, Reflect, HRServ) and its current Docker context belongs to
+# nobody in particular — HRServ never reads it and never changes it.
+operator_docker() {
+    sudo -u "$OPERATOR" -H env DOCKER_HOST="unix://$OPERATOR_HOME/.colima/default/docker.sock" \
+        /opt/homebrew/bin/docker "$@"
+}
+
 # --- Preconditions (mirrors the PRECONDITION block in wait-for-tailscale.conf)
 fail=0
 for bin in /opt/homebrew/bin/tailscale /opt/homebrew/bin/colima /opt/homebrew/bin/docker; do
@@ -56,7 +68,8 @@ if sudo -u "$OPERATOR" -H /opt/homebrew/bin/colima status >/dev/null 2>&1; then
         echo "ERROR: $HRSERV_DIR is not visible inside the Colima VM — its bind mounts" >&2
         echo "would become empty directories. Add both \"~\" (QUOTED — bare ~ is YAML" >&2
         echo "null) and /opt/hrserv to the mounts: list in ~/.colima/default/colima.yaml" >&2
-        echo "(listing mounts REPLACES the defaults), then colima stop && colima start." >&2
+        echo "(listing mounts REPLACES the defaults), then colima stop &&" >&2
+        echo "colima start --activate=false (never let colima switch the host context)." >&2
         fail=1
     fi
 else
@@ -64,10 +77,23 @@ else
     echo "the VM. Ensure colima.yaml's mounts: include it, or Postgres will crash-loop." >&2
 fi
 
+# colima's per-profile autoActivate (default true) makes ANY `colima start`
+# of this profile switch the shared host's current Docker context. The boot
+# wrapper passes --activate=false, but a manual start or `colima restart`
+# would not — the config key covers both. Fail closed: the 2026-09-30
+# co-tenancy rule (no project changes the host's context) is not optional.
+colima_yaml="$OPERATOR_HOME/.colima/default/colima.yaml"
+if [[ -f "$colima_yaml" ]] && ! grep -Eq '^autoActivate:[[:space:]]*false[[:space:]]*$' "$colima_yaml"; then
+    echo "ERROR: $colima_yaml does not set 'autoActivate: false' — any manual" >&2
+    echo "colima start/restart would switch the host's Docker context (shared host)." >&2
+    echo "Set it (takes effect on the next colima start; no restart needed now)." >&2
+    fail=1
+fi
+
 # The hrserv image build needs BuildKit (Dockerfile uses RUN --mount), and
 # unlike Linux Docker, Homebrew's docker CLI doesn't bundle buildx. Caught
 # live on big-mac-mini's first drill boot 2026-07-15.
-if ! sudo -u "$OPERATOR" -H /opt/homebrew/bin/docker buildx version >/dev/null 2>&1; then
+if ! operator_docker buildx version >/dev/null 2>&1; then
     echo "ERROR: 'docker buildx' not available for $OPERATOR — the hrserv image build" >&2
     echo "requires BuildKit. Fix: brew install docker-buildx, and wire" >&2
     echo "cliPluginsExtraDirs if needed (see 'brew info docker-buildx')." >&2
@@ -77,7 +103,7 @@ fi
 # for the operator, compose is new enough to parse `ports: !override`
 # (>= 2.24, required by docker-compose.macos.yml), and docker/.env
 # interpolates the role file cleanly. No docker daemon needed for `config`.
-if ! sudo -u "$OPERATOR" -H /opt/homebrew/bin/docker compose \
+if ! operator_docker compose \
         -f "$HRSERV_DIR/docker/docker-compose.replica.yml" \
         -f "$HRSERV_DIR/docker/docker-compose.macos.yml" \
         config --quiet; then
@@ -95,9 +121,6 @@ if [[ "$LAUNCHD_DIR" != "$HRSERV_DIR/deploy/launchd" ]]; then
     echo "scripts from $HRSERV_DIR/deploy/launchd — make sure that checkout is current." >&2
 fi
 
-# Resolve the operator's real home dir instead of assuming /Users/<name>.
-OPERATOR_HOME="$(dscl . -read "/Users/$OPERATOR" NFSHomeDirectory 2>/dev/null | sed 's/^NFSHomeDirectory: //')"
-OPERATOR_HOME="${OPERATOR_HOME:-/Users/$OPERATOR}"
 
 # FileVault halts boot at the disk-unlock screen — fatal for headless reboots.
 if fdesetup status | grep -q "FileVault is On"; then

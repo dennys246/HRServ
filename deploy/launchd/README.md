@@ -13,7 +13,7 @@ hang.
 
 | Concern | Linux (jib-jab) | macOS (this dir) |
 |---|---|---|
-| Container runtime at boot | `docker.service` (systemd) | `com.hrfunc.colima.plist` → `bin/colima-up.sh` → `colima start --foreground` |
+| Container runtime at boot | `docker.service` (systemd) | `com.hrfunc.colima.plist` → `bin/colima-up.sh` → `colima start --foreground --activate=false` |
 | Wait for tailnet IP first | `ExecStartPre=tailscale wait` drop-in, `TimeoutStartSec=120` | poll loop in `colima-up.sh` for the *specific* `TAILSCALE_IP` from `docker/.env`, 120s bound, launchd retries every 30s |
 | Clean stack up on boot | `hrserv.service` (oneshot: `dc down && dc up -d`) | `com.hrfunc.hrserv.plist` → `bin/hrserv-up.sh` (waits for dockerd, then `compose down && up -d`) |
 | Runtime crash recovery | compose `restart: unless-stopped` | same (unchanged jurisdiction split — see comments in `hrserv.service`) |
@@ -41,9 +41,9 @@ because Colima's VM state and the docker socket live in the operator's home.
      - location: /opt/hrserv
        writable: true
    ```
-   then `colima stop && colima start` (restarts every container in the VM,
-   co-tenant projects included). `install.sh` verifies this when the VM is
-   running: `colima ssh -- test -f /opt/hrserv/docker/docker-compose.replica.yml`.
+   then `colima stop && colima start --activate=false` (restarts every
+   container in the VM, co-tenant projects included). `install.sh` verifies
+   this when the VM is running: `colima ssh -- test -f /opt/hrserv/docker/docker-compose.replica.yml`.
 1. **Postgres can't bind the tailnet IP under Colima.** dockerd runs inside a
    Lima VM where `${TAILSCALE_IP}` doesn't exist on any interface, so the role
    compose files' `${TAILSCALE_IP}:5432:5432` fails with "cannot assign
@@ -65,6 +65,21 @@ because Colima's VM state and the docker socket live in the operator's home.
    ```
    Then disable key expiry for this machine in the Tailscale admin console
    (same as NEW_NODE_SETUP Step 2).
+4. **Never change the host's current Docker context.** big-mac-mini is shared
+   by AvServ, Reflect and HRServ, and since 2026-09-30 no project may switch
+   the host's current context; AvServ's tooling refuses to run when it isn't
+   AvServ's pin. So:
+   - `colima start` always gets `--activate=false` (colima activates the
+     profile's context by default — `colima-up.sh` passes the flag at boot),
+     and `~/.colima/default/colima.yaml` sets `autoActivate: false` so a
+     manual start/restart can't either (`install.sh` refuses without it).
+   - HRServ's docker commands name the engine: `DOCKER_HOST` in the scripts,
+     `docker --context colima ...` interactively (the `dc` alias includes it).
+   - Never run `docker context use`, and never start/stop/delete a Colima
+     profile HRServ didn't create — HRServ's is `default` (context `colima`);
+     AvServ's is `avserv`, Reflect's lives under `/Volumes/ReflectVault/colima`.
+     (AvServ's *dev* stack also runs inside HRServ's `default` VM, which is
+     why restarting it is a co-tenant-visible act.)
 
 ## Host settings (one-time)
 
@@ -103,6 +118,7 @@ double-start races.
 ## Verify with a deliberate reboot
 
 ```bash
+docker context show   # note it — boot must NOT change it
 sudo reboot
 # wait ~2-3 min, ssh back in (over Tailscale — that working at all is
 # already half the test), then:
@@ -117,9 +133,12 @@ tail -40 /opt/hrserv/logs/launchd-colima.log /opt/hrserv/logs/launchd-hrserv.log
 # want in colima log:  "tailnet IP 100.x.y.z assigned; starting colima"
 # want in hrserv log:  "compose up -d" then a healthy `compose ps` table
 
-docker compose -f /opt/hrserv/docker/docker-compose.replica.yml \
-               -f /opt/hrserv/docker/docker-compose.macos.yml ps
+docker --context colima compose -f /opt/hrserv/docker/docker-compose.replica.yml \
+                                 -f /opt/hrserv/docker/docker-compose.macos.yml ps
 # want: postgres healthy, hrserv + cloudflared up
+
+docker context show
+# want: the same context as before the reboot (co-tenancy rule, item 4 above)
 ```
 
 Run the drill at least twice in a row — the 2026-05-16 class of bug
@@ -136,7 +155,7 @@ Run the drill at least twice in a row — the 2026-05-16 class of bug
   `tailscale status`. Key expired? (admin console)
 - **hrserv oneshot failed** (`last exit code` ≠ 0): the log says whether it
   timed out waiting for dockerd (Colima problem — look one layer down) or
-  compose itself failed (look at `docker compose logs`).
+  compose itself failed (look at `dc logs`).
 - **Everything up but peers can't reach Postgres**: expected as a replica
   (5432 is loopback-only on macOS). See next section before exposing it.
 
@@ -173,7 +192,7 @@ override rule, and the backup.sh port).
 - `com.hrfunc.colima.plist` / `com.hrfunc.hrserv.plist` — daemon definitions
   (repo copies keep the `REPLACE_WITH_OPERATOR_USER` placeholder; the
   installer renders it)
-- `bin/colima-up.sh` — tailnet wait + `colima start --foreground`
+- `bin/colima-up.sh` — tailnet wait + `colima start --foreground --activate=false`
 - `bin/hrserv-up.sh` — dockerd wait + clean `compose down && up -d`; role
   compose file is selected by `COMPOSE_ROLE_FILE` at the top of the script.
   The macOS override pairs with EITHER role file — after a promotion, set

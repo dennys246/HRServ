@@ -95,4 +95,13 @@ fi
 # Foreground so launchd owns the VM lifecycle (same invocation brew services
 # uses). If the VM is already running, colima exits 0 and, per
 # SuccessfulExit=false, launchd leaves it alone.
-exec "$COLIMA_BIN" start --foreground
+#
+# --activate=false: this host is shared (AvServ, Reflect, HRServ), and the
+# co-tenancy rule since 2026-09-30 is that no project changes the host's
+# current Docker context. colima defaults to activating the started
+# profile's context, so without this flag every boot silently switched the
+# host to `colima` (caught by AvServ's context-pin check during a reboot
+# drill). HRServ's own docker commands address the engine explicitly
+# (DOCKER_HOST in hrserv-up.sh, `--context colima` interactively) and never
+# depend on the current context.
+exec "$COLIMA_BIN" start --foreground --activate=false
