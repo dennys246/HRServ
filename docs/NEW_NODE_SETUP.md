@@ -18,7 +18,7 @@ divergence, each learned the hard way on big-mac-mini (2026-07-15):
 | Concern | Linux (Debian reference) | macOS (Apple Silicon reference) |
 |---|---|---|
 | Container runtime | `curl get.docker.com \| sh` (includes buildx) | `brew install colima docker docker-compose docker-buildx` + wire CLI plugins; **buildx is separate and required** |
-| Runtime start | dockerd via systemd | `colima start --mount ~:w --mount /opt/hrserv:w ...` — **the repo MUST be mounted into the VM** or bind mounts silently become empty dirs |
+| Runtime start | dockerd via systemd | `colima start --activate=false --mount ~:w --mount /opt/hrserv:w ...` — **the repo MUST be mounted into the VM** or bind mounts silently become empty dirs; **never let colima switch the host's Docker context** (shared host) |
 | Tailscale | apt package (systemd unit) | Homebrew tailscaled as root LaunchDaemon — **never the GUI app** (needs login) |
 | Postgres host bind | `${TAILSCALE_IP}:5432` (role compose files) | `127.0.0.1:15432` via `docker/docker-compose.macos.yml` — **always pass it as a second `-f`**; tailnet IPs don't exist inside the Colima VM |
 | Boot orchestration (Step 9.5) | systemd units in `deploy/` | launchd chain in `deploy/launchd/` (`sudo deploy/launchd/install.sh`) |
@@ -117,7 +117,7 @@ macOS notes: `ss` doesn't exist — use
 `sudo lsof -iTCP -sTCP:LISTEN -n -P | grep -E ':(15432|8000|80|443)\b'`
 (HRServ's host bind is 15432 on macOS, per `docker/docker-compose.macos.yml` —
 a busy 5432 is fine and expected if the box hosts other projects). Also
-check for container-side squatters: `docker ps --format '{{.Names}}\t{{.Ports}}'`.
+check for container-side squatters: `docker --context colima ps --format '{{.Names}}\t{{.Ports}}'`.
 And `df -h /` measures the Mac's disk; the actual capacity bound for
 Postgres is the Colima VM disk you'll size in Step 1 (`--disk 20`).
 
@@ -143,7 +143,11 @@ brew install colima docker docker-compose docker-buildx
 # The --mount flags are REQUIRED (and replace Colima's defaults, hence ~
 # too): without /opt/hrserv mounted in the VM, the postgres config
 # bind-mounts silently become empty directories and postgres crash-loops.
-colima start --cpu 2 --memory 4 --disk 20 --mount ~:w --mount /opt/hrserv:w
+# --activate=false is REQUIRED on a shared host: colima otherwise switches
+# the host's current Docker context, which co-tenant projects pin (see
+# deploy/launchd/README.md "Key macOS differences" item 4). HRServ always
+# addresses its engine as `docker --context colima` instead.
+colima start --activate=false --cpu 2 --memory 4 --disk 20 --mount ~:w --mount /opt/hrserv:w
 docker compose version
 docker buildx version   # REQUIRED: the hrserv image build uses BuildKit
                         # (RUN --mount); Homebrew's docker doesn't bundle
@@ -192,11 +196,12 @@ echo "alias dc='docker compose -f docker/docker-compose.replica.yml'" >> ~/.bash
 source ~/.bashrc
 ```
 
-On macOS, the alias must also include the Colima port-binding override (and
-lands in `~/.zshrc`):
+On macOS, the alias must also include the Colima port-binding override and
+name HRServ's engine explicitly — the host's current Docker context belongs
+to whichever co-tenant set it (and lands in `~/.zshrc`):
 
 ```bash
-echo "alias dc='docker compose -f /opt/hrserv/docker/docker-compose.replica.yml -f /opt/hrserv/docker/docker-compose.macos.yml'" >> ~/.zshrc
+echo "alias dc='docker --context colima compose -f /opt/hrserv/docker/docker-compose.replica.yml -f /opt/hrserv/docker/docker-compose.macos.yml'" >> ~/.zshrc
 source ~/.zshrc
 ```
 
@@ -385,9 +390,11 @@ cleanly, authorizes no real replication peer. The real peer IP replaces it
 only when THIS node serves replication (post-promotion; see
 `docs/FAILOVER.md` §"macOS/Colima notes" item 3 for the macOS caveats).
 
-On macOS, also add `-f docker/docker-compose.macos.yml` to every command
-below (or just use the `dc` alias from Step 3, which includes it) — the
-replica file alone tries the tailnet-IP bind that cannot work under Colima.
+On macOS, also add `--context colima` and `-f docker/docker-compose.macos.yml`
+to every command below (or just use the `dc` alias from Step 3, which
+includes both) — the replica file alone tries the tailnet-IP bind that cannot
+work under Colima, and the bare `docker` CLI talks to whatever engine the
+host's current context points at.
 
 ```bash
 cd /opt/hrserv
@@ -505,12 +512,14 @@ chain.
 ### Verify with a deliberate reboot
 
 ```bash
+docker context show    # note it — boot must leave it unchanged
 sudo reboot
 # Wait ~2-3 minutes, SSH back in (over Tailscale), and:
 launchctl print system/com.hrfunc.colima | grep -E 'state|last exit code'   # state = running
 launchctl print system/com.hrfunc.hrserv | grep -E 'state|last exit code'   # last exit code = 0
 tail -40 /opt/hrserv/logs/launchd-hrserv.log                                # healthy `compose ps` table
 dc ps                                                                        # all three services up, postgres healthy
+docker context show                                                          # same as before the reboot
 ```
 
 Run the drill at least twice — boot races don't always fire on the first try.

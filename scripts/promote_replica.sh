@@ -28,6 +28,15 @@ set -euo pipefail
 COMPOSE_FILE="${COMPOSE_FILE:-docker/docker-compose.replica.yml}"
 DRY_RUN=true
 
+# macOS/Colima: address HRServ's engine explicitly. The Mac host is shared
+# with other projects and its current Docker context — or a DOCKER_HOST left
+# in the operator's shell — may point at any of them; promoting "whatever
+# postgres that engine has" is not an option. So override unconditionally
+# (same socket hrserv-up.sh uses at boot) and say which engine we target.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
+fi
+
 for arg in "$@"; do
     case "$arg" in
         --confirm) DRY_RUN=false ;;
@@ -51,6 +60,7 @@ run() {
 
 # Pre-flight: confirm we're actually a standby. Aborting here is much better
 # than promoting a primary on top of itself.
+log "Docker engine: ${DOCKER_HOST:-current context ($(docker context show 2>/dev/null || echo unknown))}"
 log "Checking current Postgres role..."
 in_recovery=$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
     psql -U postgres -d hrserv -tAc 'SELECT pg_is_in_recovery();' | tr -d '[:space:]')

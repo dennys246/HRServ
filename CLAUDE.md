@@ -152,6 +152,22 @@ When SSH to jib-jab fails: check fail2ban first (`fail2ban-client status sshd`),
 device list for stale entries, then NetworkManager/wpa_supplicant state. `tailscale ping` success
 does NOT prove SSH-over-Tailscale works — only proves the control plane is up.
 
+## big-mac-mini co-tenancy (since 2026-09-30)
+
+big-mac-mini is shared by AvServ, Reflect and HRServ. **No project changes the host's current
+Docker context.** AvServ's tooling refuses to run when the context isn't its pin.
+- Every `colima start` passes `--activate=false` (colima activates the profile's context by
+  default). The boot wrapper `deploy/launchd/bin/colima-up.sh` does.
+- HRServ's docker commands address the engine explicitly: `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`
+  in scripts, `docker --context colima ...` interactively (the macOS `dc` alias carries it).
+- Never run `docker context use`. Never start, stop or delete a Colima profile HRServ didn't
+  create: HRServ's is `default` (context `colima`); AvServ's is `avserv`; Reflect's lives under
+  `/Volumes/ReflectVault/colima`. Note AvServ's *dev* stack runs inside HRServ's `default` VM, so
+  restarting `default` is co-tenant-visible too.
+- HRServ's `~/.colima/default/colima.yaml` sets `autoActivate: false` (install.sh enforces it) so
+  manual `colima start`/`restart` can't switch the context either.
+- Reboot-drill check: `docker context show` is the same before and after boot.
+
 ## Things to NOT do (per bootstrap)
 
 - No read/list/search endpoints in MVP. Schema is ready; endpoints land when distribution is needed.

@@ -1,10 +1,13 @@
 # macOS/Colima port-binding override. Always use ALONGSIDE a role file:
 #
-#   docker compose -f docker/docker-compose.replica.yml \
-#                  -f docker/docker-compose.macos.yml up -d
+#   docker --context colima compose -f docker/docker-compose.replica.yml \
+#                                   -f docker/docker-compose.macos.yml up -d
 #   # or, after this node is promoted to primary:
-#   docker compose -f docker/docker-compose.primary.yml \
-#                  -f docker/docker-compose.macos.yml up -d
+#   docker --context colima compose -f docker/docker-compose.primary.yml \
+#                                   -f docker/docker-compose.macos.yml up -d
+#
+# (`--context colima`: the Mac host is shared and its current Docker context
+# is never assumed to be HRServ's — see deploy/launchd/README.md.)
 #
 # NEVER run a role file alone on macOS — without this override the
 # ${TAILSCALE_IP} bind recreates and Postgres fails to start.

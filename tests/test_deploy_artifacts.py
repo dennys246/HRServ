@@ -217,3 +217,76 @@ def test_macos_override_replaces_tailnet_port_bind() -> None:
     # why it can't be used are fine).
     effective = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     assert "${TAILSCALE_IP}" not in effective
+
+
+# The Mac host is shared (AvServ, Reflect, HRServ); since 2026-09-30 no
+# project may change the host's current Docker context. These pin the three
+# ways HRServ could violate that.
+CONTEXT_SAFE_SCRIPTS = [*SCRIPT_PATHS, REPO_ROOT / "scripts" / "promote_replica.sh"]
+
+
+def test_colima_boot_does_not_activate_its_context() -> None:
+    """colima activates the started profile's context by default, so a bare
+    `colima start` at boot switches the host to `colima` on every reboot
+    (caught by AvServ's context-pin check during a reboot drill)."""
+    text = (LAUNCHD_DIR / "bin" / "colima-up.sh").read_text()
+    assert 'exec "$COLIMA_BIN" start --foreground --activate=false' in text
+    starts = [ln for ln in text.splitlines() if re.search(r"COLIMA_BIN\"? start\b", ln)]
+    assert starts and all("--activate=false" in ln for ln in starts), starts
+
+
+@pytest.mark.parametrize("script", CONTEXT_SAFE_SCRIPTS, ids=lambda p: p.name)
+def test_scripts_never_switch_or_touch_foreign_docker_state(script: Path) -> None:
+    """No `docker context use`, and no colima invocation aimed at a profile
+    HRServ didn't create (AvServ's `avserv`, Reflect's ReflectVault one)."""
+    code = "\n".join(
+        ln for ln in script.read_text().splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert "context use" not in code
+    assert not re.search(r"colima\b[^\n]*(--profile|-p\s)", code), "colima aimed at a named profile"
+    assert "avserv" not in code.lower() and "ReflectVault" not in code
+
+
+def test_install_docker_calls_address_colima_engine_explicitly() -> None:
+    """Every docker call in install.sh goes through operator_docker, which
+    pins DOCKER_HOST to HRServ's Colima socket — never the current context."""
+    text = (LAUNCHD_DIR / "install.sh").read_text()
+    assert 'DOCKER_HOST="unix://$OPERATOR_HOME/.colima/default/docker.sock"' in text
+    bare = [ln for ln in text.splitlines() if "/opt/homebrew/bin/docker " in ln]
+    # The only direct invocation allowed is the one inside operator_docker.
+    assert len(bare) == 1 and "DOCKER_HOST" not in bare[0], bare
+    # Nor via PATH / a variable: any docker subcommand outside the helper.
+    code = [ln for ln in text.splitlines() if not ln.lstrip().startswith(("#", "echo"))]
+    stray = [
+        ln
+        for ln in code
+        if re.search(r"\bdocker\b\s+(compose|buildx|ps|info|exec|run|context)\b", ln)
+        and "operator_docker" not in ln
+    ]
+    assert not stray, stray
+    assert re.search(
+        r"operator_docker\(\) \{\n[^}]*DOCKER_HOST=[^}]*/opt/homebrew/bin/docker", text
+    )
+
+
+def test_hrserv_and_promote_scripts_pin_colima_socket() -> None:
+    hrserv_up = (LAUNCHD_DIR / "bin" / "hrserv-up.sh").read_text()
+    assert (
+        'export DOCKER_HOST="${DOCKER_HOST:-unix://$HOME/.colima/default/docker.sock}"' in hrserv_up
+    )
+    promote = (REPO_ROOT / "scripts" / "promote_replica.sh").read_text()
+    # Unconditional on Darwin: a DOCKER_HOST left in the operator's shell may
+    # point at a co-tenant's engine.
+    assert re.search(
+        r'if \[\[ "\$\(uname -s\)" == "Darwin" \]\]; then\n'
+        r'    export DOCKER_HOST="unix://\$HOME/\.colima/default/docker\.sock"',
+        promote,
+    ), "promote_replica.sh no longer pins HRServ's Colima socket on macOS"
+
+
+def test_install_requires_colima_autoactivate_off() -> None:
+    """--activate=false only covers the boot path; autoActivate: false in the
+    profile config covers manual `colima start`/`restart` too."""
+    text = (LAUNCHD_DIR / "install.sh").read_text()
+    assert "autoActivate:[[:space:]]*false" in text
+    assert '.colima/default/colima.yaml"' in text

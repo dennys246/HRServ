@@ -70,7 +70,11 @@ and prepare these BEFORE a failover window, not during one:
    Running `docker-compose.primary.yml` alone recreates Postgres with the
    `${TAILSCALE_IP}:5432` bind, which deterministically fails under Colima —
    Postgres down mid-failover. The `dc` alias also hardcodes the replica
-   file; update it at promotion.
+   file; update it at promotion. Every command also names the engine
+   (`docker --context colima ...`, which the `dc` alias carries): the Mac is
+   shared and its current Docker context may point at a co-tenant's engine.
+   `scripts/promote_replica.sh` sets `DOCKER_HOST` to HRServ's Colima socket
+   on macOS for the same reason. Never `docker context use`.
 2. **Flip the boot chain's role.** After promoting, set
    `COMPOSE_ROLE_FILE="docker-compose.primary.yml"` in
    `deploy/launchd/bin/hrserv-up.sh`. Otherwise the next reboot quietly
